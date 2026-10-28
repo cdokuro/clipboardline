@@ -1,5 +1,5 @@
 'use strict';
-const {spawn,execFile} = require('node:child_process');
+const {spawn,execFile,execFileSync} = require('node:child_process');
 const path = require('node:path');
 const {ClipboardSequenceQueries}=require('./clipboard-sequence.cjs');
 const {windowsEnvironment}=require('./windows-environment.cjs');
@@ -89,6 +89,38 @@ function run(mode, target) {
   });
 }
 
+function getLinuxClipboardFormats() {
+  if (process.env.WAYLAND_DISPLAY) {
+    try {
+      const out = execFileSync('wl-paste', ['--list-types'], { encoding: 'utf8', timeout: 500 });
+      return out.split(/\r?\n/).filter(Boolean);
+    } catch {}
+  }
+  try {
+    const out = execFileSync('xclip', ['-selection', 'clipboard', '-t', 'TARGETS', '-o'], { encoding: 'utf8', timeout: 500 });
+    return out.split(/\r?\n/).filter(Boolean);
+  } catch {}
+  return [];
+}
+
+function getLinuxClipboardImage() {
+  if (process.env.WAYLAND_DISPLAY) {
+    try {
+      const buf = execFileSync('wl-paste', ['-t', 'image/png'], { maxBuffer: 64 * 1024 * 1024, timeout: 2000 });
+      if (buf && buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+        return buf;
+      }
+    } catch {}
+  }
+  try {
+    const buf = execFileSync('xclip', ['-selection', 'clipboard', '-t', 'image/png', '-o'], { maxBuffer: 64 * 1024 * 1024, timeout: 2000 });
+    if (buf && buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+      return buf;
+    }
+  } catch {}
+  return null;
+}
+
 function monitor(changed, failed, focused = () => {}) {
   if (process.platform === 'linux') {
     let lastSeenSignature = null;
@@ -99,17 +131,15 @@ function monitor(changed, failed, focused = () => {}) {
       if (!alive) return;
       try {
         const { clipboard } = require('electron');
-        const formats = typeof clipboard.availableFormats === 'function' ? clipboard.availableFormats() : [];
+        const formats = getLinuxClipboardFormats();
         const text = await Promise.resolve(clipboard.readText()).catch(() => '');
         let imageSignature = '';
-        if (formats.some(f => f.startsWith('image/')) && typeof clipboard.readImage === 'function') {
+        if (formats.some(f => f.startsWith('image/') || f === 'image/png')) {
           try {
-            const img = clipboard.readImage();
-            if (img && !img.isEmpty()) {
-              const size = img.getSize();
-              const bmp = img.toBitmap();
-              const mid = Math.floor(bmp.length / 2);
-              imageSignature = `${size.width}x${size.height}:${bmp.length}:${bmp.subarray(0, 64).toString('base64')}:${bmp.subarray(mid, mid + 64).toString('base64')}`;
+            const img = getLinuxClipboardImage();
+            if (img && img.length > 0) {
+              const mid = Math.floor(img.length / 2);
+              imageSignature = `${img.length}:${img.subarray(0, 32).toString('base64')}:${img.subarray(mid, mid + 32).toString('base64')}`;
             }
           } catch {}
         }
@@ -181,5 +211,7 @@ module.exports = {
   validatePaste: target => run('ValidatePaste', {...target, prepared: true}),
   paste: target => run('Paste', target),
   copyImages: payload => run('CopyImages', payload),
+  getLinuxClipboardFormats,
+  getLinuxClipboardImage,
   monitor
 };

@@ -173,17 +173,20 @@ async function clipboardContent() {
 async function readClipboard() {
   if(capturing){pendingClipboard=true;return;}if(!store||closing||!['captureText','captureImages','captureLinks'].some(key=>store.data.settings[key]))return;capturing=true;
   try{
-    const content=await clipboardContent();if(!content)return;
+    const content=await clipboardContent();
+    if(!content){ console.log('[ClipBoardLine] clipboardContent returned null'); return; }
     if(content.raced){pendingClipboard=true;return;}
-    if(content.fingerprint===lastFingerprint)return;lastFingerprint=content.fingerprint;
+    if(content.fingerprint===lastFingerprint){ return; }
+    lastFingerprint=content.fingerprint;
     if(content.fingerprint===ownFingerprint){ownFingerprint='';return;}
     if(content.owned)return;
     const key={image:'captureImages',text:'captureText',link:'captureLinks'}[content.kind];if(!store.data.settings[key])return;
+    console.log('[ClipBoardLine] Captured new clipboard item:', content.kind, content.kind === 'image' ? (content.value?.length + ' bytes') : content.value);
     const item=store.insert(content.kind,content.value);broadcast();
     if(item.kind==='link')void enrich(item.id);
     if(item.kind==='image'){queueOCR(item.id);refreshImageSearch();}
     if(item.kind==='image'&&store.data.settings.openAfterScreenshot&&!desiredVisible)await show('shelves',{selectId:item.id,kind:'image'});
-  }catch(error){notify('Clipboard capture: '+error.message);}finally{capturing=false;if(pendingClipboard){pendingClipboard=false;queueMicrotask(()=>void readClipboard());}}
+  }catch(error){notify('Clipboard capture: '+error.message);console.error('[ClipBoardLine] capture error:', error);}finally{capturing=false;if(pendingClipboard){pendingClipboard=false;queueMicrotask(()=>void readClipboard());}}
 }
 async function enrich(id,{refresh=false}={}) {
   if(!store.data.settings.fetchLinkMetadata||(!refresh&&pending.has(id)))return;
