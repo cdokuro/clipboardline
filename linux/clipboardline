@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -e
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export ELECTRON_DISABLE_SECURITY_WARNINGS=true
+
+if [ -x "$DIR/dist/linux-unpacked/clipboardline-desktop" ]; then
+  exec "$DIR/dist/linux-unpacked/clipboardline-desktop" "$@"
+else
+  exec "$DIR/node_modules/.bin/electron" "$DIR" "$@"
+fi

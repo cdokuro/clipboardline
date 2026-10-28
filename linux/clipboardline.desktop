@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=ClipBoardLine
+Comment=Keyboard-first local clipboard shelves and saved library
+Exec=/home/dokuro/Masaüstü/orkunprogram/clipboardline-linux/clipboardline %U
+Icon=/home/dokuro/Masaüstü/orkunprogram/clipboardline-linux/assets/clipboardline.png
+Terminal=false
+Type=Application
+Categories=Utility;Office;
+StartupWMClass=ClipBoardLine
+Keywords=clipboard;paste;shelf;history;ocr;

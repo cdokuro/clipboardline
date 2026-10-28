@@ -4,9 +4,9 @@
 
 Görseller, metinler ve linkler elinin altında. Son kopyalarını üç askıda tut, önemli olanları yerel kütüphaneye kaydet ve tümünde klavyeyle hızla gezin.
 
-[English README](README.md) · [Mac için indir](https://github.com/orkunisitmak/clipboardline/releases/latest) · [Windows x64 için indir](https://github.com/orkunisitmak/clipboardline/releases/latest) · [Kaynak kodu incele](https://github.com/orkunisitmak/clipboardline) · [Ekran görüntüleri ve demolar](https://orkunisitmak.github.io/clipboardline/tr/#demo)
+[English README](README.md) · [Mac için indir](https://github.com/orkunisitmak/clipboardline/releases/latest) · [Windows x64 için indir](https://github.com/orkunisitmak/clipboardline/releases/latest) · [Linux sürümü](linux/) · [Kaynak kodu incele](https://github.com/orkunisitmak/clipboardline) · [Ekran görüntüleri ve demolar](https://orkunisitmak.github.io/clipboardline/tr/#demo)
 
-> macOS sürümü Swift, AppKit, SwiftUI, Vision ve Core ML kullanır; Apple silicon ve Intel’de macOS 14 veya üstünü destekler. Ayrı Electron sürümü Windows x64 için kullanılabilir; farklar ve gerçek Windows doğrulama kanıtı aşağıdaki platform tablosundadır.
+> macOS sürümü Swift, AppKit, SwiftUI, Vision ve Core ML kullanır; Apple silicon ve Intel’de macOS 14 veya üstünü destekler. Windows x64 ve Linux sürümleri masaüstü entegrasyonuyla Electron tabanlı olarak çalışır.
 
 **Özellik rehberi — 1.7.3:** bu sayfa kaynak ağacındaki uygulamayı anlatır. İndirilebilir paketler [son sürümde](https://github.com/orkunisitmak/clipboardline/releases/latest) listelenir; her yeni yayım iki yerel platform testini gerektirir. [Kapsam ve doğrulama şartları](docs/parity-1.7.3.md).
 
