@@ -11,7 +11,7 @@
   --text-color: #e8c96a;
   --link: #73daca;
   --danger: #f7768e;
-  --scrim-bg: radial-gradient(ellipse at 50% 25%, rgba(12, 13, 21, 0.44) 0%, rgba(7, 8, 14, 0.56) 100%);
+  --scrim-bg: radial-gradient(ellipse at 50% 25%, rgba(10, 11, 18, 0.82) 0%, rgba(5, 6, 11, 0.92) 100%);
   --neon-primary: #e8c96a;
   --neon-secondary: #7aa2f7;
   --neon-rope: rgba(232, 201, 106, 0.64);
@@ -44,7 +44,7 @@
   --image: #00e5ff;
   --text-color: #88c0d0;
   --link: #2ee6a6;
-  --scrim-bg: radial-gradient(ellipse at 50% 25%, rgba(8, 17, 26, 0.44) 0%, rgba(5, 10, 16, 0.56) 100%);
+  --scrim-bg: radial-gradient(ellipse at 50% 25%, rgba(7, 14, 22, 0.82) 0%, rgba(4, 8, 13, 0.92) 100%);
   --neon-primary: #00e5ff;
   --neon-secondary: #2ee6a6;
   --neon-rope: rgba(0, 229, 255, 0.60);
@@ -69,7 +69,7 @@
   --image: #89b4fa;
   --text-color: #cba6f7;
   --link: #a6e3a1;
-  --scrim-bg: radial-gradient(ellipse at 50% 25%, rgba(19, 15, 31, 0.44) 0%, rgba(11, 9, 19, 0.56) 100%);
+  --scrim-bg: radial-gradient(ellipse at 50% 25%, rgba(15, 12, 25, 0.82) 0%, rgba(9, 7, 15, 0.92) 100%);
   --neon-primary: #cba6f7;
   --neon-secondary: #f5c2e7;
   --neon-rope: rgba(203, 166, 247, 0.64);
@@ -94,7 +94,7 @@
   --image: #9ccfd8;
   --text-color: #f6c177;
   --link: #31748f;
-  --scrim-bg: radial-gradient(ellipse at 50% 25%, rgba(25, 14, 23, 0.44) 0%, rgba(13, 8, 13, 0.56) 100%);
+  --scrim-bg: radial-gradient(ellipse at 50% 25%, rgba(20, 11, 18, 0.82) 0%, rgba(10, 6, 10, 0.92) 100%);
   --neon-primary: #eb6f92;
   --neon-secondary: #f6c177;
   --neon-rope: rgba(235, 111, 146, 0.62);
