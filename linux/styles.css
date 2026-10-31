@@ -786,10 +786,9 @@ body.view-mini .shell,
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(5, 6, 11, 0.42);
-  backdrop-filter: blur(14px);
+  background: transparent;
+  backdrop-filter: none;
   z-index: 9999;
-  animation: miniFadeIn 0.14s ease-out;
 }
 
 .mini-card {

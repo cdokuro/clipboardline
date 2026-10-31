@@ -111,6 +111,36 @@ function trusted(event) {
 function rememberNormalBounds(){if(window&&view!=='shelves'&&view!=='capture'&&!applyingBounds&&!window.isMinimized()){normalBounds=window.getNormalBounds();normalMaximized=window.isMaximized();}}
 function fitNormalBounds(area){const width=Math.min(area.width,normalBounds?.width||1180),height=Math.min(area.height,normalBounds?.height||800);return{width,height,x:Math.min(area.x+area.width-width,Math.max(area.x,normalBounds?.x??Math.round(area.x+(area.width-width)/2))),y:Math.min(area.y+area.height-height,Math.max(area.y,normalBounds?.y??Math.round(area.y+(area.height-height)/2)))};}
 function fitCaptureBounds(area){const width=Math.min(area.width-48,Math.max(780,Math.round(area.width*0.76))),height=Math.min(area.height-48,Math.max(540,Math.round(area.height*0.76)));return{width,height,x:Math.round(area.x+(area.width-width)/2),y:Math.round(area.y+(area.height-height)/2)};}
+let cachedLinuxOutputs=null,lastLinuxOutputsFetch=0;
+function getLinuxOutputs(){
+  const now=Date.now();
+  if(cachedLinuxOutputs&&now-lastLinuxOutputsFetch<4000)return cachedLinuxOutputs;
+  try{
+    const {execFileSync}=require('node:child_process');
+    const kscreenOut=execFileSync('kscreen-doctor',['-j'],{timeout:1000,encoding:'utf8'});
+    const data=JSON.parse(kscreenOut);const map=new Map();
+    for(const out of data.outputs||[]){
+      if(out.enabled&&out.pos)map.set(out.name,{x:out.pos.x,y:out.pos.y,width:out.size?.width||0,height:out.size?.height||0});
+    }
+    cachedLinuxOutputs=map;lastLinuxOutputsFetch=now;return map;
+  }catch{return cachedLinuxOutputs||new Map();}
+}
+function getActiveDisplay(){
+  if(process.platform==='linux'&&typeof screen!=='undefined'){
+    const displays=screen.getAllDisplays();
+    if(displays.length<=1)return displays[0]||screen.getPrimaryDisplay();
+    try{
+      const {execFileSync}=require('node:child_process');
+      const out=execFileSync('busctl',['--user','call','org.kde.KWin','/KWin','org.kde.KWin','activeOutputName'],{timeout:400,encoding:'utf8'});
+      const match=out.match(/s\s+"([^"]+)"/);
+      if(match){
+        const activeName=match[1],outputs=getLinuxOutputs(),target=outputs.get(activeName);
+        if(target){const found=displays.find(d=>d.bounds.x===target.x&&d.bounds.y===target.y);if(found)return found;}
+      }
+    }catch{}
+  }
+  return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+}
 async function show(next='shelves',event=null) {
   cancelRecordingTrims();
   if(pastePromise){pasteGeneration++;cancelNativePaste();}
@@ -127,14 +157,17 @@ async function show(next='shelves',event=null) {
     }
     if(next!=='capture')pendingCapture=null;
     rememberNormalBounds();view=next;viewEvent=event?{...event,serial:crypto.randomUUID()}:null;message='';
-    const display=screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    const display=getActiveDisplay();
     const isOverlay=next==='shelves'||next==='mini';
     applyingBounds=true;
     try{
       const surface=isOverlay?'overlay':next==='capture'?'capture':'normal';
-      if(process.platform==='linux'&&!testMode&&window.isVisible()&&(!window.isFocused()||windowSurface!==surface||previousView!==next))window.hide();
+      const bounds=next==='capture'?fitCaptureBounds(display.workArea):isOverlay?display.workArea:fitNormalBounds(display.workArea);
+      const currentBounds=window.getBounds();
+      const boundsChanged=!windowBounds.same(currentBounds,bounds);
+      if(process.platform==='linux'&&!testMode&&window.isVisible()&&(!window.isFocused()||windowSurface!==surface||previousView!==next||boundsChanged))window.hide();
       if(windowSurface!==surface){window.setMinimumSize(isOverlay?1:640,isOverlay?1:360);window.setResizable(!isOverlay);window.setMaximizable(!isOverlay);window.setSkipTaskbar(isOverlay);window.setBackgroundColor(isOverlay?'#00000000':'#18191d');window.setHasShadow(!isOverlay);window.setAlwaysOnTop((process.platform==='linux'&&!testMode)||isOverlay||next==='capture');windowSurface=surface;}
-      const bounds=next==='capture'?fitCaptureBounds(display.workArea):next==='shelves'?display.workArea:fitNormalBounds(display.workArea);windowBounds.apply(window,bounds,{overlay:isOverlay});if(!isOverlay&&next!=='capture'&&normalMaximized)window.maximize();
+      windowBounds.apply(window,bounds,{overlay:isOverlay});if(!isOverlay&&next!=='capture'&&normalMaximized)window.maximize();
     }finally{applyingBounds=false;}
     const animate=next==='shelves'&&(!window.isVisible()||wasClosing||previousView==='capture');
     if(animate)await shelfMotion.request('prepare',{hidden:!window.isVisible()||previousView==='capture'});else await shelfMotion.request('reset');
@@ -266,7 +299,7 @@ async function capture() {
     // Capture only after the shelf window has left the compositor.
     await new Promise(resolve=>setTimeout(resolve,150));
     let pngBuffer = null;
-    const activeDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    const activeDisplay = getActiveDisplay();
     if(process.platform === 'linux') {
       const tempShot = path.join(require('node:os').tmpdir(), 'clipboardline-shot-' + Date.now() + '.png');
       try {
@@ -286,7 +319,7 @@ async function capture() {
 
     if(!pngBuffer) {
       try {
-        const display=screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+        const display=getActiveDisplay();
         const sources=await desktopCapturer.getSources({types:['screen'],thumbnailSize:{width:Math.round(display.size.width*display.scaleFactor),height:Math.round(display.size.height*display.scaleFactor)}});
         const source=sources.find(s=>s.display_id===String(display.id))||sources[0];
         if(source && !source.thumbnail.isEmpty()) {

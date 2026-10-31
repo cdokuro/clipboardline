@@ -8,6 +8,7 @@ const copy=value=>Object.fromEntries(keys.map(key=>[key,value[key]]));
 // request is cheap only while the actual window still has that realized frame.
 class WindowBounds {
  constructor(){this.requested=null;this.realized=null;}
+ same(left,right){return same(left,right);}
  retains(window,requested){return same(this.requested,requested)&&same(this.realized,window.getBounds());}
  apply(window,requested,{overlay=false}={}){
   if(window.isMinimized())window.restore();
