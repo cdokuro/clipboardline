@@ -106,15 +106,15 @@ function getLinuxClipboardFormats() {
 function getLinuxClipboardImage() {
   if (process.env.WAYLAND_DISPLAY) {
     try {
-      const buf = execFileSync('wl-paste', ['-t', 'image/png'], { maxBuffer: 64 * 1024 * 1024, timeout: 2000 });
-      if (buf && buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+      const buf = execFileSync('wl-paste', ['-t', 'image/png'], { maxBuffer: 64 * 1024 * 1024, timeout: 3000 });
+      if (buf && buf.length >= 24 && buf.subarray(0, 8).toString('hex') === '89504e470d0a1a0a') {
         return buf;
       }
     } catch {}
   }
   try {
-    const buf = execFileSync('xclip', ['-selection', 'clipboard', '-t', 'image/png', '-o'], { maxBuffer: 64 * 1024 * 1024, timeout: 2000 });
-    if (buf && buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    const buf = execFileSync('xclip', ['-selection', 'clipboard', '-t', 'image/png', '-o'], { maxBuffer: 64 * 1024 * 1024, timeout: 3000 });
+    if (buf && buf.length >= 24 && buf.subarray(0, 8).toString('hex') === '89504e470d0a1a0a') {
       return buf;
     }
   } catch {}
@@ -123,46 +123,65 @@ function getLinuxClipboardImage() {
 
 function monitor(changed, failed, focused = () => {}) {
   if (process.platform === 'linux') {
-    let lastSeenSignature = null;
     let alive = true;
     let timer = null;
+    let watchProc = null;
 
-    const check = async () => {
+    const notifyChanged = () => {
+      linuxSequence = (linuxSequence + 1) % 0xffffffff || 1;
+      changed(linuxSequence);
+    };
+
+    if (process.env.WAYLAND_DISPLAY) {
+      try {
+        const { spawn } = require('node:child_process');
+        watchProc = spawn('wl-paste', ['--watch', 'echo', '1'], {
+          stdio: ['ignore', 'pipe', 'ignore'],
+          windowsHide: true
+        });
+        watchProc.stdout?.on('data', () => {
+          if (!alive) return;
+          notifyChanged();
+        });
+        watchProc.on('error', () => { watchProc = null; });
+        watchProc.on('exit', () => { watchProc = null; });
+      } catch {
+        watchProc = null;
+      }
+    }
+
+    let lastSeenFormats = '';
+    let lastSeenText = '';
+
+    const poll = async () => {
       if (!alive) return;
       try {
-        const { clipboard } = require('electron');
-        const formats = getLinuxClipboardFormats();
-        const text = await Promise.resolve(clipboard.readText()).catch(() => '');
-        let imageSignature = '';
-        if (formats.some(f => f.startsWith('image/') || f === 'image/png')) {
-          try {
-            const img = getLinuxClipboardImage();
-            if (img && img.length > 0) {
-              const mid = Math.floor(img.length / 2);
-              imageSignature = `${img.length}:${img.subarray(0, 32).toString('base64')}:${img.subarray(mid, mid + 32).toString('base64')}`;
-            }
-          } catch {}
-        }
-        const signature = `${formats.join(',')}||${text}||${imageSignature}`;
-        if (lastSeenSignature === null) {
-          lastSeenSignature = signature;
+        const formats = getLinuxClipboardFormats().join(',');
+        if (formats !== lastSeenFormats) {
+          lastSeenFormats = formats;
+          notifyChanged();
           return;
         }
-        if (signature !== lastSeenSignature) {
-          lastSeenSignature = signature;
-          linuxSequence = (linuxSequence + 1) % 0xffffffff || 1;
-          changed(linuxSequence);
+        const { clipboard } = require('electron');
+        const text = await Promise.resolve(clipboard.readText()).catch(() => '');
+        if (text !== lastSeenText) {
+          lastSeenText = text;
+          notifyChanged();
         }
       } catch {}
     };
 
-    timer = setInterval(check, 500);
+    timer = setInterval(poll, watchProc ? 2000 : 600);
     timer.unref?.();
 
     return {
       kill: () => {
         alive = false;
         if (timer) clearInterval(timer);
+        if (watchProc) {
+          try { watchProc.kill('SIGTERM'); } catch {}
+          watchProc = null;
+        }
       },
       stdin: {
         write: () => {},

@@ -46,7 +46,7 @@ function languageCode(){const configured=state.settings.language||'system',code=
 const t = text => window.clipboardLineTranslations?.[languageCode()]?.[text] || (languageCode()==='tr'?TR[text]:null) || text;
 const esc = value => String(value ?? '').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const attr = esc;
-const fold = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase();
+const fold = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
 let indexedItems=null,itemIndex=new Map();
 const item = id => {if(indexedItems!==state.items){indexedItems=state.items;itemIndex=new Map(state.items.map(value=>[value.id,value]));}return itemIndex.get(id);};
 const saved = value => value.pinned || value.retainedAt!=null || value.folderIds?.length || value.tags?.length;
@@ -352,6 +352,25 @@ function miniItemRow(it,idx){
   contentHtml=`<div class="mini-text-icon">📝</div><div class="mini-text-wrap"><div class="mini-item-title">${esc(firstLine||'(Boş metin)')}</div><div class="mini-item-meta">${snippet.length} karakter · ${dateStr}</div></div>`;
  }
  return `<div class="mini-item ${isSelected?'selected':''}" data-id="${it.id}" data-action="mini-paste" title="Yapıştırmak için tıkla (Enter)"><div class="mini-item-leading">${numBadge}</div><div class="mini-item-body">${contentHtml}</div>${it.pinned?'<span class="mini-pinned-badge" title="Sabitlenmiş">📌</span>':''}<div class="mini-item-actions" onclick="event.stopPropagation()"><button class="mini-action-btn" data-action="mini-paste" data-id="${it.id}" title="Önceki uygulamaya yapıştır (Enter)">📥 Yapıştır</button><button class="mini-action-btn" data-action="mini-copy" data-id="${it.id}" title="Panoya kopyala (Ctrl+C)">📋</button><button class="mini-action-btn" data-action="mini-pin" data-id="${it.id}" title="${it.pinned?'Sabitlemeyi kaldır':'Sabitle'}">${it.pinned?'📌':'📍'}</button><button class="mini-action-btn mini-btn-danger" data-action="mini-trash" data-id="${it.id}" title="Sil">🗑️</button></div></div>`;
+}
+function switchMiniFilter(nextFilter){
+ ui.miniFilter=nextFilter;
+ const items=getMiniItems();
+ ui.miniActiveId=items.length?items[0].id:null;
+ const chipRow=document.querySelector('.mini-chips-row');
+ if(chipRow){
+  chipRow.querySelectorAll('.mini-chip').forEach(c=>c.classList.toggle('active',c.dataset.filter===ui.miniFilter));
+ }
+ const list=document.querySelector('.mini-list');
+ if(list){
+  const query=(ui.miniSearch||'').trim().toLowerCase();
+  list.innerHTML=items.length?items.map((it,idx)=>miniItemRow(it,idx)).join(''):miniEmptyState(query,ui.miniFilter);
+ }
+ const sub=document.querySelector('.mini-subtitle');
+ if(sub){
+  const totalCount=state.items.filter(it=>!it.trashedAt).length;
+  sub.textContent=`${items.length} / ${totalCount} öğe · Meta+V`;
+ }
 }
 function miniWorkspace(){
  const items=getMiniItems();
@@ -1002,6 +1021,21 @@ document.addEventListener('keydown',async event=>{
    }
    return;
   }
+  if(event.key==='ArrowLeft'||event.key==='ArrowRight'){
+   const isSearch=document.activeElement&&document.activeElement.id==='mini-search-input';
+   if(isSearch&&document.activeElement.value){
+    const {selectionStart,selectionEnd,value}=document.activeElement;
+    if(selectionStart!==selectionEnd)return;
+    if(event.key==='ArrowLeft'&&selectionStart>0)return;
+    if(event.key==='ArrowRight'&&selectionStart<value.length)return;
+   }
+   event.preventDefault();
+   const filters=['all','text','image','link','pinned'];
+   const curr=filters.indexOf(ui.miniFilter||'all');
+   const nextIdx=event.key==='ArrowRight'?(curr+1)%filters.length:(curr-1+filters.length)%filters.length;
+   switchMiniFilter(filters[nextIdx]);
+   return;
+  }
   if(event.key==='Enter'&&!event.shiftKey){
    event.preventDefault();const items=getMiniItems();
    const active=items.find(it=>it.id===ui.miniActiveId)||items[0];
@@ -1083,7 +1117,7 @@ async function clickAction(target){const action=target.dataset.action;
  if(action==='mini-copy'){const id=target.dataset.id;if(id){await command('copy',{ids:[id]});toast(t('Copied'));}return;}
  if(action==='mini-pin'){const id=target.dataset.id;if(id)await command('pin',{ids:[id]});return;}
  if(action==='mini-trash'){const id=target.dataset.id;if(id)await command('trash',{ids:[id]});return;}
- if(action==='mini-filter'){ui.miniFilter=target.dataset.filter;render();return;}
+ if(action==='mini-filter'){switchMiniFilter(target.dataset.filter);return;}
  if(action==='mini-clear-search'){ui.miniSearch='';render();document.getElementById('mini-search-input')?.focus();return;}
  if(action==='video-trim-save'){await saveVideoTrim();return;}if(action==='video-trim-cancel'){await cancelVideoTrim();return;}
 

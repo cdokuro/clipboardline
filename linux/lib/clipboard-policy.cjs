@@ -36,6 +36,7 @@ async function readClipboardContent({clipboard,sequence,marker,plainURL}){
       value = url || text;
     }
     if (!await current()) return changed;
+    if (!bytes || bytes.length === 0) return null;
     return { kind, value, owned: false, fingerprint: kind + ':' + crypto.createHash('sha256').update(bytes).digest('hex') };
   }
 
@@ -59,6 +60,11 @@ async function readClipboardContent({clipboard,sequence,marker,plainURL}){
   if(image){
     const blob=await image.getType('image/png');if(blob.size>64*1024*1024)return null;
     bytes=Buffer.from(await blob.arrayBuffer());kind='image';value=bytes;
+    if(bytes.length===0 && process.platform==='linux'){
+      const { getLinuxClipboardImage } = require('./native.cjs');
+      const b=getLinuxClipboardImage();
+      if(b && b.length>0){bytes=b;value=b;}
+    }
   }else{
     // Use this item's payload, never a second live readText() of a replacement
     // clipboard whose private formats have not been inspected.
@@ -70,6 +76,7 @@ async function readClipboardContent({clipboard,sequence,marker,plainURL}){
     const url=plainURL(value);kind=url?'link':'text';if(url)value=url;
   }
   if(!await current())return changed;
+  if(kind==='image'&&(!bytes||bytes.length===0))return null;
   return{kind,value,owned:false,fingerprint:kind+':'+crypto.createHash('sha256').update(bytes).digest('hex')};
 }
 module.exports={privateClipboard,readClipboardContent};

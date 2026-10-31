@@ -150,11 +150,6 @@ function getActiveDisplay(cursor=null){
   if(typeof screen!=='undefined'){
     const displays=screen.getAllDisplays();
     if(displays.length<=1)return displays[0]||screen.getPrimaryDisplay();
-    if(cursor&&Number.isFinite(cursor.x)&&Number.isFinite(cursor.y)){
-      const found=displays.find(d=>cursor.x>=d.bounds.x&&cursor.x<d.bounds.x+d.bounds.width&&cursor.y>=d.bounds.y&&cursor.y<d.bounds.y+d.bounds.height);
-      if(found)return found;
-      return screen.getDisplayNearestPoint(cursor);
-    }
     if(process.platform==='linux'){
       try{
         const {execFileSync}=require('node:child_process');
@@ -165,6 +160,11 @@ function getActiveDisplay(cursor=null){
           if(target){const found=displays.find(d=>d.bounds.x===target.x&&d.bounds.y===target.y);if(found)return found;}
         }
       }catch{}
+    }
+    if(cursor&&Number.isFinite(cursor.x)&&Number.isFinite(cursor.y)){
+      const found=displays.find(d=>cursor.x>=d.bounds.x&&cursor.x<d.bounds.x+d.bounds.width&&cursor.y>=d.bounds.y&&cursor.y<d.bounds.y+d.bounds.height);
+      if(found)return found;
+      return screen.getDisplayNearestPoint(cursor);
     }
   }
   return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
@@ -192,7 +192,9 @@ async function show(next='shelves',event=null) {
     if(next==='mini'&&cursor&&Number.isFinite(cursor.x)&&Number.isFinite(cursor.y)){
       const originX=display.workArea?.x??display.bounds.x;
       const originY=display.workArea?.y??display.bounds.y;
-      mousePos={x:cursor.x-originX,y:cursor.y-originY,screenWidth:display.workArea.width,screenHeight:display.workArea.height};
+      if(cursor.x>=originX&&cursor.x<originX+display.workArea.width&&cursor.y>=originY&&cursor.y<originY+display.workArea.height){
+        mousePos={x:cursor.x-originX,y:cursor.y-originY,screenWidth:display.workArea.width,screenHeight:display.workArea.height};
+      }
     }
     viewEvent=event?{...event,...(mousePos?{mousePosition:mousePos}:{}),serial:crypto.randomUUID()}:(mousePos?{mousePosition:mousePos,serial:crypto.randomUUID()}:null);
     applyingBounds=true;
@@ -251,6 +253,11 @@ async function readClipboard() {
     if(content.fingerprint===ownFingerprint){ownFingerprint='';return;}
     if(content.owned)return;
     const key={image:'captureImages',text:'captureText',link:'captureLinks'}[content.kind];if(!store.data.settings[key])return;
+    if(content.kind==='image'){
+      if(!Buffer.isBuffer(content.value)||content.value.length<24||content.value.subarray(0,8).toString('hex')!=='89504e470d0a1a0a'){
+        return;
+      }
+    }
     console.log('[ClipBoardLine] Captured new clipboard item:', content.kind, content.kind === 'image' ? (content.value?.length + ' bytes') : content.value);
     const item=store.insert(content.kind,content.value);broadcast();
     if(item.kind==='link')void enrich(item.id);
