@@ -989,9 +989,17 @@ document.addEventListener('keydown',async event=>{
    if(idx===-1)idx=0;
    else if(event.key==='ArrowDown')idx=(idx+1)%items.length;
    else idx=(idx-1+items.length)%items.length;
-   ui.miniActiveId=items[idx].id;render();
-   const activeNode=document.querySelector(`.mini-item[data-id="${ui.miniActiveId}"]`);
-   activeNode?.scrollIntoView({block:'nearest'});
+   ui.miniActiveId=items[idx].id;
+   const list=document.querySelector('.mini-list');
+   if(list){
+    list.querySelectorAll('.mini-item').forEach(node=>{
+     node.classList.toggle('selected',node.dataset.id===ui.miniActiveId);
+    });
+    const activeNode=list.querySelector(`.mini-item[data-id="${ui.miniActiveId}"]`);
+    activeNode?.scrollIntoView({block:'nearest'});
+   }else{
+    render();
+   }
    return;
   }
   if(event.key==='Enter'&&!event.shiftKey){
