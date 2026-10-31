@@ -94,7 +94,7 @@ function createTray(){
   tray=new Tray(appIcon());
   trayPresentation=new StatusTray({tray,createIcon:summary=>trayIcon(nativeImage,appIcon(),summary),createMenu:summary=>{
     const t=(key,...values)=>translated(summary.language,key,...values);
-    return Menu.buildFromTemplate([{id:'tray-show',label:t('Show line'),click:()=>show('shelves')},{id:'tray-library',label:t('Library'),click:()=>show('library')},{id:'tray-capture',label:t('Screenshots'),click:()=>capture()},{id:'tray-settings',label:t('Settings'),click:()=>show('settings')},
+    return Menu.buildFromTemplate([{id:'tray-show',label:t('Show line'),click:()=>show('shelves')},{id:'tray-mini',label:t('Mini clipboard')||'Mini Pano (Alt+Meta+V)',click:()=>show('mini')},{id:'tray-library',label:t('Library'),click:()=>show('library')},{id:'tray-capture',label:t('Screenshots'),click:()=>capture()},{id:'tray-settings',label:t('Settings'),click:()=>show('settings')},
       ...(summary.updateVersion?[{id:'tray-update',label:t('Update available')+': '+summary.updateVersion+'…',click:openUpdates}]:[]),{id:'tray-check',label:t('Check for updates…'),click:async()=>{await openUpdates();await updates.check();}},{type:'separator'},{id:'tray-quit',label:t('Quit %@','ClipBoardLine'),click:()=>app.quit()}]);
   }});
   refreshTray();tray.on('click',()=>desiredVisible?hide():show('shelves'));
@@ -128,7 +128,7 @@ async function show(next='shelves',event=null) {
     if(next!=='capture')pendingCapture=null;
     rememberNormalBounds();view=next;viewEvent=event?{...event,serial:crypto.randomUUID()}:null;message='';
     const display=screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-    const isOverlay=next==='shelves';
+    const isOverlay=next==='shelves'||next==='mini';
     applyingBounds=true;
     try{
       const surface=isOverlay?'overlay':next==='capture'?'capture':'normal';
@@ -185,7 +185,6 @@ async function readClipboard() {
     const item=store.insert(content.kind,content.value);broadcast();
     if(item.kind==='link')void enrich(item.id);
     if(item.kind==='image'){queueOCR(item.id);refreshImageSearch();}
-    if(item.kind==='image'&&store.data.settings.openAfterScreenshot&&!desiredVisible)await show('shelves',{selectId:item.id,kind:'image'});
   }catch(error){notify('Clipboard capture: '+error.message);console.error('[ClipBoardLine] capture error:', error);}finally{capturing=false;if(pendingClipboard){pendingClipboard=false;queueMicrotask(()=>void readClipboard());}}
 }
 async function enrich(id,{refresh=false}={}) {
@@ -349,13 +348,15 @@ function configureShortcuts(previousPreferences=null) {
   if(process.platform==='linux'&&!testMode&&!previousPreferences){
     const sc=store.data.settings.shortcuts||{};
     if(!sc.library||sc.library==='Alt+I'){try{store.modify('setSettings',{patch:{shortcuts:{library:'Alt+Shift+L'}}});}catch{}}
+    if(!sc.mini){try{store.modify('setSettings',{patch:{shortcuts:{mini:'Alt+Super+V'}}});}catch{}}
   }
   shortcutRegistry??=new GlobalShortcuts(createLinuxShortcutRegistry(globalShortcut),{
     toggle:()=>(desiredVisible&&window?.isVisible()&&(testMode||window?.isFocused())&&view==='shelves')?hide():show('shelves'),
     search:()=>show('shelves',{search:true}),
     library:()=>(desiredVisible&&window?.isVisible()&&window?.isFocused()&&view==='library')?hide():show('library'),
     copyLatest:async()=>{const latest=store.data.items.filter(item=>!item.trashedAt&&!item.hiddenFromShelf).sort((a,b)=>b.createdAt-a.createdAt)[0];if(latest){await writeClipboard([latest]);notify('Copied');if(store.data.settings.sounds)shell.beep();}},
-    screenshot:capture
+    screenshot:capture,
+    mini:()=>(desiredVisible&&window?.isVisible()&&(testMode||window?.isFocused())&&view==='mini')?hide():show('mini')
   },{failed:error=>notify(error.message)});
   const rejected=shortcutRegistry.update(store.data.settings.shortcuts);
   if(rejected.length){
@@ -372,7 +373,7 @@ async function command(action,payload={}) {
   if(action==='beginShortcutRecording')startShortcutRecording(payload.token);
   else if(action==='endShortcutRecording'){if(typeof payload.token==='string')finishShortcutRecording(payload.token);}
   else if(modelActions.has(action)){if(action==='saveImage'){if(typeof payload.dataUrl!=='string'||payload.dataUrl.length>90_000_000)throw new Error('Invalid edited image');const decoded=nativeImage.createFromDataURL(payload.dataUrl);if(decoded.isEmpty()||decoded.getSize().width*decoded.getSize().height>80_000_000)throw new Error('Invalid edited image');}result=store.modify(action,payload);if(action==='saveImage')queueOCR(payload.id);if(['saveImage','remove','delete','trash','trashUndoably','undoTrash','restore','undo','cleanup','clearUnsavedHistory'].includes(action))refreshImageSearch();if(action==='remove'||action==='trash'||action==='trashUndoably'||action==='delete'||action==='clearUnsavedHistory')viewEvent={removedIds:['clearUnsavedHistory','trash','trashUndoably'].includes(action)?result.ids:payload.ids||[payload.id],serial:crypto.randomUUID()};}
-  else if(action==='show'||action==='search')await show('shelves',action==='search'?{search:true}:null);
+  else if(action==='show'||action==='search'||action==='mini')await show(action==='mini'?'mini':'shelves',action==='search'?{search:true}:null);
   else if(action==='hide'){if(pastePromise){pasteGeneration++;cancelNativePaste();}await hide();}
   else if(action==='library'||action==='settings')await show(action);
   else if(action==='windowClose'){if(pastePromise){pasteGeneration++;cancelNativePaste();}await hide();}

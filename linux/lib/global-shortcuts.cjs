@@ -1,6 +1,6 @@
 'use strict';
 const {spawn,execFileSync}=require('node:child_process');
-const ACTIONS=['toggle','search','library','copyLatest','screenshot'];
+const ACTIONS=['toggle','search','library','copyLatest','screenshot','mini'];
 
 const QT_SPECIAL_KEYS=Object.freeze({
  SPACE:0x20,ESCAPE:0x01000000,ESC:0x01000000,TAB:0x01000001,BACKSPACE:0x01000003,
@@ -97,9 +97,6 @@ function createLinuxShortcutRegistry(fallbackRegistry){
      return true;
     };
     if(!registerOne(key,code))return false;
-    // Also bind Alt+Shift+V / Alt+Shift+C alias for clipboard toggle convenience
-    if(key==='Alt+Shift+C'&&!callbacks.has('Alt+Shift+V'))try{registerOne('Alt+Shift+V',qtKeyCode('Alt+Shift+V'));}catch{}
-    else if(key==='Alt+Shift+V'&&!callbacks.has('Alt+Shift+C'))try{registerOne('Alt+Shift+C',qtKeyCode('Alt+Shift+C'));}catch{}
     ensureMonitor();
     return true;
    }catch{
@@ -110,11 +107,6 @@ function createLinuxShortcutRegistry(fallbackRegistry){
    callbacks.delete(key);
    try{
     execFileSync('busctl',['--user','call','org.kde.kglobalaccel','/kglobalaccel','org.kde.KGlobalAccel','unregister','ss','clipboardline',key],{stdio:'ignore',timeout:2000});
-    if(key==='Alt+Shift+C'||key==='Alt+Shift+V'){
-     const alias=key==='Alt+Shift+C'?'Alt+Shift+V':'Alt+Shift+C';
-     callbacks.delete(alias);
-     try{execFileSync('busctl',['--user','call','org.kde.kglobalaccel','/kglobalaccel','org.kde.KGlobalAccel','unregister','ss','clipboardline',alias],{stdio:'ignore',timeout:2000});}catch{}
-    }
    }catch{
     try{fallbackRegistry.unregister(key);}catch{}
    }
