@@ -125,19 +125,47 @@ function getLinuxOutputs(){
     cachedLinuxOutputs=map;lastLinuxOutputsFetch=now;return map;
   }catch{return cachedLinuxOutputs||new Map();}
 }
-function getActiveDisplay(){
-  if(process.platform==='linux'&&typeof screen!=='undefined'){
-    const displays=screen.getAllDisplays();
-    if(displays.length<=1)return displays[0]||screen.getPrimaryDisplay();
+function getCursorPosition(){
+  if(process.platform==='linux'){
+    const binary=path.join(__dirname,'native','get-cursor');
     try{
       const {execFileSync}=require('node:child_process');
-      const out=execFileSync('busctl',['--user','call','org.kde.KWin','/KWin','org.kde.KWin','activeOutputName'],{timeout:400,encoding:'utf8'});
-      const match=out.match(/s\s+"([^"]+)"/);
-      if(match){
-        const activeName=match[1],outputs=getLinuxOutputs(),target=outputs.get(activeName);
-        if(target){const found=displays.find(d=>d.bounds.x===target.x&&d.bounds.y===target.y);if(found)return found;}
+      if(fs.existsSync(binary)){
+        const out=execFileSync(binary,{timeout:200,encoding:'utf8'}).trim();
+        const [x,y]=out.split(/\s+/).map(Number);
+        if(Number.isFinite(x)&&Number.isFinite(y))return{x,y};
       }
     }catch{}
+    try{
+      const {execFileSync}=require('node:child_process');
+      const py="import ctypes; x11=ctypes.cdll.LoadLibrary('libX11.so.6'); x11.XOpenDisplay.restype=ctypes.c_void_p; x11.XOpenDisplay.argtypes=[ctypes.c_char_p]; x11.XDefaultRootWindow.restype=ctypes.c_ulong; x11.XDefaultRootWindow.argtypes=[ctypes.c_void_p]; x11.XQueryPointer.restype=ctypes.c_int; x11.XQueryPointer.argtypes=[ctypes.c_void_p,ctypes.c_ulong,ctypes.POINTER(ctypes.c_ulong),ctypes.POINTER(ctypes.c_ulong),ctypes.POINTER(ctypes.c_int),ctypes.POINTER(ctypes.c_int),ctypes.POINTER(ctypes.c_int),ctypes.POINTER(ctypes.c_int),ctypes.POINTER(ctypes.c_uint)]; x11.XCloseDisplay.argtypes=[ctypes.c_void_p]; d=x11.XOpenDisplay(None)\nif d:\n r,c=ctypes.c_ulong(),ctypes.c_ulong(); rx,ry,wx,wy=ctypes.c_int(),ctypes.c_int(),ctypes.c_int(),ctypes.c_int(); m=ctypes.c_uint()\n if x11.XQueryPointer(d,x11.XDefaultRootWindow(d),ctypes.byref(r),ctypes.byref(c),ctypes.byref(rx),ctypes.byref(ry),ctypes.byref(wx),ctypes.byref(wy),ctypes.byref(m)): print(f'{rx.value} {ry.value}')\n x11.XCloseDisplay(d)";
+      const out=execFileSync('python3',['-c',py],{timeout:300,encoding:'utf8'}).trim();
+      const [x,y]=out.split(/\s+/).map(Number);
+      if(Number.isFinite(x)&&Number.isFinite(y))return{x,y};
+    }catch{}
+  }
+  return(typeof screen!=='undefined'&&screen.getCursorScreenPoint)?screen.getCursorScreenPoint():{x:0,y:0};
+}
+function getActiveDisplay(cursor=null){
+  if(typeof screen!=='undefined'){
+    const displays=screen.getAllDisplays();
+    if(displays.length<=1)return displays[0]||screen.getPrimaryDisplay();
+    if(cursor&&Number.isFinite(cursor.x)&&Number.isFinite(cursor.y)){
+      const found=displays.find(d=>cursor.x>=d.bounds.x&&cursor.x<d.bounds.x+d.bounds.width&&cursor.y>=d.bounds.y&&cursor.y<d.bounds.y+d.bounds.height);
+      if(found)return found;
+      return screen.getDisplayNearestPoint(cursor);
+    }
+    if(process.platform==='linux'){
+      try{
+        const {execFileSync}=require('node:child_process');
+        const out=execFileSync('busctl',['--user','call','org.kde.KWin','/KWin','org.kde.KWin','activeOutputName'],{timeout:400,encoding:'utf8'});
+        const match=out.match(/s\s+"([^"]+)"/);
+        if(match){
+          const activeName=match[1],outputs=getLinuxOutputs(),target=outputs.get(activeName);
+          if(target){const found=displays.find(d=>d.bounds.x===target.x&&d.bounds.y===target.y);if(found)return found;}
+        }
+      }catch{}
+    }
   }
   return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
 }
@@ -156,9 +184,17 @@ async function show(next='shelves',event=null) {
       previous=pasteTargets.capture(target);
     }
     if(next!=='capture')pendingCapture=null;
-    rememberNormalBounds();view=next;viewEvent=event?{...event,serial:crypto.randomUUID()}:null;message='';
-    const display=getActiveDisplay();
+    rememberNormalBounds();view=next;message='';
+    const cursor=getCursorPosition();
+    const display=getActiveDisplay(cursor);
     const isOverlay=next==='shelves'||next==='mini';
+    let mousePos=null;
+    if(next==='mini'&&cursor&&Number.isFinite(cursor.x)&&Number.isFinite(cursor.y)){
+      const originX=display.workArea?.x??display.bounds.x;
+      const originY=display.workArea?.y??display.bounds.y;
+      mousePos={x:cursor.x-originX,y:cursor.y-originY,screenWidth:display.workArea.width,screenHeight:display.workArea.height};
+    }
+    viewEvent=event?{...event,...(mousePos?{mousePosition:mousePos}:{}),serial:crypto.randomUUID()}:(mousePos?{mousePosition:mousePos,serial:crypto.randomUUID()}:null);
     applyingBounds=true;
     try{
       const surface=isOverlay?'overlay':next==='capture'?'capture':'normal';
@@ -167,7 +203,8 @@ async function show(next='shelves',event=null) {
       const boundsChanged=!windowBounds.same(currentBounds,bounds);
       if(process.platform==='linux'&&!testMode&&window.isVisible()&&(!window.isFocused()||windowSurface!==surface||previousView!==next||boundsChanged))window.hide();
       if(windowSurface!==surface){window.setMinimumSize(isOverlay?1:640,isOverlay?1:360);window.setResizable(!isOverlay);window.setMaximizable(!isOverlay);window.setSkipTaskbar(isOverlay);window.setBackgroundColor(isOverlay?'#00000000':'#18191d');window.setHasShadow(!isOverlay);window.setAlwaysOnTop((process.platform==='linux'&&!testMode)||isOverlay||next==='capture');windowSurface=surface;}
-      windowBounds.apply(window,bounds,{overlay:isOverlay});if(!isOverlay&&next!=='capture'&&normalMaximized)window.maximize();
+      windowBounds.apply(window,bounds,{overlay:isOverlay});
+      if(!isOverlay&&next!=='capture'&&normalMaximized)window.maximize();
     }finally{applyingBounds=false;}
     const animate=next==='shelves'&&(!window.isVisible()||wasClosing||previousView==='capture');
     if(animate)await shelfMotion.request('prepare',{hidden:!window.isVisible()||previousView==='capture'});else await shelfMotion.request('reset');
@@ -381,7 +418,7 @@ function configureShortcuts(previousPreferences=null) {
   if(process.platform==='linux'&&!testMode&&!previousPreferences){
     const sc=store.data.settings.shortcuts||{};
     if(!sc.library||sc.library==='Alt+I'){try{store.modify('setSettings',{patch:{shortcuts:{library:'Alt+Shift+L'}}});}catch{}}
-    if(!sc.mini){try{store.modify('setSettings',{patch:{shortcuts:{mini:'Alt+Super+V'}}});}catch{}}
+    if(!sc.mini||sc.mini==='Alt+Super+V'){try{store.modify('setSettings',{patch:{shortcuts:{mini:'Meta+V'}}});}catch{}}
   }
   shortcutRegistry??=new GlobalShortcuts(createLinuxShortcutRegistry(globalShortcut),{
     toggle:()=>(desiredVisible&&window?.isVisible()&&(testMode||window?.isFocused())&&view==='shelves')?hide():show('shelves'),
@@ -590,6 +627,15 @@ else app.whenReady().then(async()=>{
   // Test hooks are main-process only and require an explicit isolated data path.
   if(testMode&&testFolder)global.__clipboardLineTest={store,command,state,readClipboard,writeClipboard,clipboardContent,privateClipboard,importFile,getMediaJobs:()=>mediaJobs,getWindow:()=>window,getTray:()=>({tray,presentation:trayPresentation}),getTarget:()=>previous,setTarget:value=>{previous=value;},getObservedTarget:()=>pasteTargets.reenter(),getCaptureAdmissionState:()=>({capturing,pendingClipboard}),getShortcutRecordingState:()=>({token:shortcutRecording?.token||null,suspended:shortcutRegistry?.suspended||false}),getImageSearch:()=>imageSearch,getMediaDiagnostics:()=>mediaDiagnostics.map(value=>({...value})),enableShortcuts:configureShortcuts,getUpdates:()=>updates,setUpdates:value=>{updates=value;updates.changed=()=>broadcast();updates.available=updateAvailable;updateScheduler=new AutomaticUpdateScheduler(updates,{enabled:()=>store.data.settings.autoCheckUpdates});},getUpdateScheduler:()=>updateScheduler,capture,native};
 }).catch(error=>{dialog.showErrorBox('ClipBoardLine could not start',error.message);app.exit(1);});
-app.on('second-instance',()=>{if(window)void show('shelves');});
+app.on('second-instance',(_event,commandLine)=>{
+  if(!window)return;
+  const isShelves=Array.isArray(commandLine)&&commandLine.some(arg=>typeof arg==='string'&&arg.includes('--shelves'));
+  const targetView=isShelves?'shelves':'mini';
+  if(desiredVisible&&window.isVisible()&&view===targetView){
+    void hide();
+  }else{
+    void show(targetView);
+  }
+});
 app.on('activate',()=>{if(window)void show('shelves');});
 app.on('before-quit',()=>{closing=true;visibilityGeneration++;shelfMotion.cancel();trayPresentation?.dispose();tray?.destroy();cancelRecordingTrims();mediaJobs?.dispose();dragFiles?.dispose();clearTimeout(imageSearchTimer);void imageSearch?.stop();clearInterval(clipboardTimer);clearInterval(retentionTimer);clearInterval(updateTimer);clearTimeout(updateLaunchTimer);monitor?.kill();watchers.forEach(w=>w.close());shortcutRegistry?.dispose();globalShortcut.unregisterAll();});

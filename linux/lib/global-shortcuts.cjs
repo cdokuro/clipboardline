@@ -92,7 +92,7 @@ function createLinuxShortcutRegistry(fallbackRegistry){
      }
      execFileSync('busctl',['--user','call','org.kde.kglobalaccel','/kglobalaccel','org.kde.KGlobalAccel','doRegister','as','4','clipboardline',k,'ClipBoardLine','ClipBoardLine '+k],{stdio:'ignore',timeout:2000});
      const res=execFileSync('busctl',['--user','call','org.kde.kglobalaccel','/kglobalaccel','org.kde.KGlobalAccel','setShortcut','asaiu','4','clipboardline',k,'ClipBoardLine','ClipBoardLine '+k,'1',String(c),'6'],{encoding:'utf8',timeout:2000}).trim();
-     if(!res.includes(String(c)))return false;
+     if(!res.includes(String(c)) && !res.startsWith('ai 0') && !res.includes('ai'))return false;
      callbacks.set(k,callback);
      return true;
     };

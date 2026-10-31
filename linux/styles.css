@@ -783,15 +783,17 @@ body.view-mini .shell,
 .mini-backdrop {
   position: fixed;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
   background: transparent;
   backdrop-filter: none;
   z-index: 9999;
 }
 
 .mini-card {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   width: 490px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 48px);
@@ -802,7 +804,7 @@ body.view-mini .shell,
   border: 1px solid var(--neon-border);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65), 0 0 24px var(--neon-glow);
   overflow: hidden;
-  animation: miniSlideUp 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: miniFadeIn 0.14s ease-out;
 }
 
 @keyframes miniFadeIn {
