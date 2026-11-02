@@ -1,12 +1,26 @@
 'use strict';
-const {spawn,execFile,execFileSync} = require('node:child_process');
+const {spawn,execFile} = require('node:child_process');
 const path = require('node:path');
+const fs = require('node:fs');
+const net = require('node:net');
 const {ClipboardSequenceQueries}=require('./clipboard-sequence.cjs');
 const {windowsEnvironment}=require('./windows-environment.cjs');
 const script = __dirname.includes('app.asar') ? path.join(process.resourcesPath,'native','windows-bridge.ps1') : path.join(__dirname, '..', 'native', 'windows-bridge.ps1');
 const pasteChildren=new Set();
 let lastCaptureTrace=null,sequenceQueries=null;
 let linuxSequence = 1;
+
+function findExecutable(name) {
+  const envPath = process.env.PATH || '';
+  for (const dir of envPath.split(':')) {
+    if (!dir) continue;
+    const full = path.join(dir, name);
+    try {
+      if (fs.existsSync(full) && (fs.statSync(full).mode & 0o111)) return full;
+    } catch {}
+  }
+  return null;
+}
 
 function captureTrace(value){
   const reasons=['deadline','query-deadline','host-changed','host-changed-during-query','missing-before-loading','warm','secure','noneditable','editor-changed','stable-editor','sample-limit'];
@@ -41,22 +55,34 @@ function run(mode, target) {
     }
     if (mode === 'Paste') {
       return new Promise((resolve) => {
-        const tools = [
-          { cmd: 'wtype', args: ['-M', 'ctrl', '-k', 'v', '-m', 'ctrl'] },
-          { cmd: 'xdotool', args: ['key', '--clearmodifiers', 'ctrl+v'] },
-          { cmd: 'ydotool', args: ['key', '29:1', '47:1', '47:0', '29:0'] }
+        const candidates = [
+          { name: 'wtype', args: ['-M', 'ctrl', '-k', 'v', '-m', 'ctrl'] },
+          { name: 'ydotool', args: ['key', '29:1', '47:1', '47:0', '29:0'] },
+          { name: 'xdotool', args: ['key', '--clearmodifiers', 'ctrl+v'] }
         ];
-        let dispatched = false;
-        for (const t of tools) {
-          try {
-            const child = execFile(t.cmd, t.args, { timeout: 1000 }, () => {
-              pasteChildren.delete(child);
-            });
-            pasteChildren.add(child);
-            dispatched = true;
+        let tool = null;
+        for (const candidate of candidates) {
+          const bin = findExecutable(candidate.name);
+          if (bin) {
+            tool = { bin, args: candidate.args };
             break;
-          } catch {}
+          }
         }
+        if (!tool) {
+          resolve({ ok: true, dispatched: false });
+          return;
+        }
+        let dispatched = false;
+        try {
+          const child = execFile(tool.bin, tool.args, { timeout: 1000 }, () => {
+            pasteChildren.delete(child);
+          });
+          child.on('error', () => {
+            pasteChildren.delete(child);
+          });
+          pasteChildren.add(child);
+          dispatched = true;
+        } catch {}
         resolve({ ok: true, dispatched });
       });
     }
@@ -89,31 +115,47 @@ function run(mode, target) {
   });
 }
 
-function getLinuxClipboardFormats() {
+async function getLinuxClipboardFormats() {
   if (process.env.WAYLAND_DISPLAY) {
     try {
-      const out = execFileSync('wl-paste', ['--list-types'], { encoding: 'utf8', timeout: 500 });
+      const out = await new Promise((resolve, reject) => {
+        execFile('wl-paste', ['--list-types'], { encoding: 'utf8', timeout: 1000 }, (err, stdout) => {
+          if (err) reject(err); else resolve(stdout);
+        });
+      });
       return out.split(/\r?\n/).filter(Boolean);
     } catch {}
   }
   try {
-    const out = execFileSync('xclip', ['-selection', 'clipboard', '-t', 'TARGETS', '-o'], { encoding: 'utf8', timeout: 500 });
+    const out = await new Promise((resolve, reject) => {
+      execFile('xclip', ['-selection', 'clipboard', '-t', 'TARGETS', '-o'], { encoding: 'utf8', timeout: 1000 }, (err, stdout) => {
+        if (err) reject(err); else resolve(stdout);
+      });
+    });
     return out.split(/\r?\n/).filter(Boolean);
   } catch {}
   return [];
 }
 
-function getLinuxClipboardImage() {
+async function getLinuxClipboardImage() {
   if (process.env.WAYLAND_DISPLAY) {
     try {
-      const buf = execFileSync('wl-paste', ['-t', 'image/png'], { maxBuffer: 64 * 1024 * 1024, timeout: 3000 });
+      const buf = await new Promise((resolve, reject) => {
+        execFile('wl-paste', ['-t', 'image/png'], { maxBuffer: 64 * 1024 * 1024, timeout: 3000, encoding: 'buffer' }, (err, stdout) => {
+          if (err) reject(err); else resolve(stdout);
+        });
+      });
       if (buf && buf.length >= 24 && buf.subarray(0, 8).toString('hex') === '89504e470d0a1a0a') {
         return buf;
       }
     } catch {}
   }
   try {
-    const buf = execFileSync('xclip', ['-selection', 'clipboard', '-t', 'image/png', '-o'], { maxBuffer: 64 * 1024 * 1024, timeout: 3000 });
+    const buf = await new Promise((resolve, reject) => {
+      execFile('xclip', ['-selection', 'clipboard', '-t', 'image/png', '-o'], { maxBuffer: 64 * 1024 * 1024, timeout: 3000, encoding: 'buffer' }, (err, stdout) => {
+        if (err) reject(err); else resolve(stdout);
+      });
+    });
     if (buf && buf.length >= 24 && buf.subarray(0, 8).toString('hex') === '89504e470d0a1a0a') {
       return buf;
     }
@@ -124,63 +166,140 @@ function getLinuxClipboardImage() {
 function monitor(changed, failed, focused = () => {}) {
   if (process.platform === 'linux') {
     let alive = true;
-    let timer = null;
-    let watchProc = null;
+    let client = null;
+    let reconnectTimer = null;
+    let reconnectDelay = 250;
+    const maxReconnectDelay = 4000;
+    let socketConnected = false;
+    let fallbackTimer = null;
 
-    const notifyChanged = () => {
-      linuxSequence = (linuxSequence + 1) % 0xffffffff || 1;
-      changed(linuxSequence);
+    const socketPath = process.env.XDG_RUNTIME_DIR
+      ? path.join(process.env.XDG_RUNTIME_DIR, 'orkun-clipboard.sock')
+      : path.join('/run/user', String(process.getuid ? process.getuid() : 1000), 'orkun-clipboard.sock');
+
+    const notifyChanged = (event) => {
+      if (!alive) return;
+      if (event && Number.isInteger(event.seq)) {
+        linuxSequence = event.seq;
+      } else {
+        linuxSequence = (linuxSequence + 1) % 0xffffffff || 1;
+      }
+      changed(event || linuxSequence);
     };
 
-    if (process.env.WAYLAND_DISPLAY) {
+    function connectSocket() {
+      if (!alive) return;
       try {
-        const { spawn } = require('node:child_process');
-        watchProc = spawn('wl-paste', ['--watch', 'echo', '1'], {
-          stdio: ['ignore', 'pipe', 'ignore'],
-          windowsHide: true
+        client = net.createConnection(socketPath);
+        let buffer = '';
+
+        client.on('connect', () => {
+          socketConnected = true;
+          reconnectDelay = 250;
+          if (fallbackTimer) {
+            clearInterval(fallbackTimer);
+            fallbackTimer = null;
+          }
         });
-        watchProc.stdout?.on('data', () => {
+
+        client.on('data', (chunk) => {
           if (!alive) return;
-          notifyChanged();
+          buffer += chunk.toString('utf8');
+          let newlineIdx;
+          while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, newlineIdx).trim();
+            buffer = buffer.slice(newlineIdx + 1);
+            if (!line) continue;
+            try {
+              const event = JSON.parse(line);
+              if (event.origin === 'clipboardline') {
+                continue;
+              }
+              notifyChanged(event);
+            } catch {}
+          }
         });
-        watchProc.on('error', () => { watchProc = null; });
-        watchProc.on('exit', () => { watchProc = null; });
+
+        client.on('error', () => {
+          socketConnected = false;
+          scheduleReconnect();
+        });
+
+        client.on('close', () => {
+          socketConnected = false;
+          scheduleReconnect();
+        });
+
+        client.on('end', () => {
+          socketConnected = false;
+          scheduleReconnect();
+        });
       } catch {
-        watchProc = null;
+        socketConnected = false;
+        scheduleReconnect();
       }
+    }
+
+    function scheduleReconnect() {
+      if (!alive || reconnectTimer) return;
+      if (client) {
+        try { client.destroy(); } catch {}
+        client = null;
+      }
+      startFallbackPolling();
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
+        connectSocket();
+      }, reconnectDelay);
+      reconnectTimer.unref?.();
     }
 
     let lastSeenFormats = '';
     let lastSeenText = '';
+    let pollingActive = false;
 
-    const poll = async () => {
-      if (!alive) return;
-      try {
-        const formats = getLinuxClipboardFormats().join(',');
-        if (formats !== lastSeenFormats) {
-          lastSeenFormats = formats;
-          notifyChanged();
-          return;
+    function startFallbackPolling() {
+      if (fallbackTimer || socketConnected || !alive) return;
+      fallbackTimer = setInterval(async () => {
+        if (!alive || socketConnected || pollingActive) return;
+        pollingActive = true;
+        try {
+          const formats = (await getLinuxClipboardFormats()).join(',');
+          if (formats !== lastSeenFormats) {
+            lastSeenFormats = formats;
+            notifyChanged();
+            return;
+          }
+          const { clipboard } = require('electron');
+          const text = await Promise.resolve(clipboard.readText()).catch(() => '');
+          if (text !== lastSeenText) {
+            lastSeenText = text;
+            notifyChanged();
+          }
+        } catch {} finally {
+          pollingActive = false;
         }
-        const { clipboard } = require('electron');
-        const text = await Promise.resolve(clipboard.readText()).catch(() => '');
-        if (text !== lastSeenText) {
-          lastSeenText = text;
-          notifyChanged();
-        }
-      } catch {}
-    };
+      }, 1000);
+      fallbackTimer.unref?.();
+    }
 
-    timer = setInterval(poll, watchProc ? 2000 : 600);
-    timer.unref?.();
+    connectSocket();
 
     return {
       kill: () => {
         alive = false;
-        if (timer) clearInterval(timer);
-        if (watchProc) {
-          try { watchProc.kill('SIGTERM'); } catch {}
-          watchProc = null;
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        if (fallbackTimer) {
+          clearInterval(fallbackTimer);
+          fallbackTimer = null;
+        }
+        if (client) {
+          try { client.destroy(); } catch {}
+          client = null;
         }
       },
       stdin: {

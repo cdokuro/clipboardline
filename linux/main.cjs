@@ -14,7 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const {pathToFileURL} = require('node:url');
-const {spawn} = require('node:child_process');
+const {spawn, execFile} = require('node:child_process');
 const {Store,plainURL,ids} = require('./lib/model.cjs');
 const {privateClipboard,readClipboardContent}=require('./lib/clipboard-policy.cjs');
 const {mediaOrigin}=require('./lib/media-policy.cjs');
@@ -44,7 +44,8 @@ if(process.platform==='linux'&&!testMode&&process.env.WAYLAND_DISPLAY){
 app.setName(development?'ClipBoardLine Dev':'ClipBoardLine');
 protocol.registerSchemesAsPrivileged([{scheme:'appmedia',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true,stream:true}}]);
 let window,store,tray,trayPresentation,updates,updateScheduler,monitor,clipboardTimer,retentionTimer,updateTimer,updateLaunchTimer,previous=null,view='shelves',message='',viewEvent=null;
-let lastFingerprint='',ownFingerprint='',capturing=false,pendingClipboard=false,showing=0,closing=false,watchers=[],normalBounds=null,normalMaximized=false,applyingBounds=false;
+let lastFingerprint='',ownFingerprint='',showing=0,closing=false,watchers=[],normalBounds=null,normalMaximized=false,applyingBounds=false;
+const clipboardQueue=[];let processingClipboard=false;
 let pastePromise=null,hidePromise=null,pasteGeneration=0;
 let lastBroadcastLibraryRevision=-1,windowSurface=null,pendingCapture=null;
 let visibilityGeneration=0,desiredVisible=false;
@@ -111,60 +112,88 @@ function trusted(event) {
 function rememberNormalBounds(){if(window&&view!=='shelves'&&view!=='capture'&&!applyingBounds&&!window.isMinimized()){normalBounds=window.getNormalBounds();normalMaximized=window.isMaximized();}}
 function fitNormalBounds(area){const width=Math.min(area.width,normalBounds?.width||1180),height=Math.min(area.height,normalBounds?.height||800);return{width,height,x:Math.min(area.x+area.width-width,Math.max(area.x,normalBounds?.x??Math.round(area.x+(area.width-width)/2))),y:Math.min(area.y+area.height-height,Math.max(area.y,normalBounds?.y??Math.round(area.y+(area.height-height)/2)))};}
 function fitCaptureBounds(area){const width=Math.min(area.width-48,Math.max(780,Math.round(area.width*0.76))),height=Math.min(area.height-48,Math.max(540,Math.round(area.height*0.76)));return{width,height,x:Math.round(area.x+(area.width-width)/2),y:Math.round(area.y+(area.height-height)/2)};}
-let cachedLinuxOutputs=null,lastLinuxOutputsFetch=0;
+let cachedLinuxOutputs=new Map(),lastLinuxOutputsFetch=0,fetchingOutputs=false;
+function refreshLinuxOutputs(){
+  if(fetchingOutputs)return;
+  fetchingOutputs=true;
+  execFile('kscreen-doctor',['-j'],{timeout:2000,encoding:'utf8'},(err,stdout)=>{
+    fetchingOutputs=false;
+    if(err||!stdout)return;
+    try{
+      const data=JSON.parse(stdout);const map=new Map();
+      for(const out of data.outputs||[]){
+        if(out.enabled&&out.pos)map.set(out.name,{x:out.pos.x,y:out.pos.y,width:out.size?.width||0,height:out.size?.height||0});
+      }
+      cachedLinuxOutputs=map;lastLinuxOutputsFetch=Date.now();
+    }catch{}
+  });
+}
 function getLinuxOutputs(){
   const now=Date.now();
-  if(cachedLinuxOutputs&&now-lastLinuxOutputsFetch<4000)return cachedLinuxOutputs;
-  try{
-    const {execFileSync}=require('node:child_process');
-    const kscreenOut=execFileSync('kscreen-doctor',['-j'],{timeout:1000,encoding:'utf8'});
-    const data=JSON.parse(kscreenOut);const map=new Map();
-    for(const out of data.outputs||[]){
-      if(out.enabled&&out.pos)map.set(out.name,{x:out.pos.x,y:out.pos.y,width:out.size?.width||0,height:out.size?.height||0});
-    }
-    cachedLinuxOutputs=map;lastLinuxOutputsFetch=now;return map;
-  }catch{return cachedLinuxOutputs||new Map();}
+  if(!lastLinuxOutputsFetch||now-lastLinuxOutputsFetch>4000){
+    refreshLinuxOutputs();
+  }
+  return cachedLinuxOutputs;
+}
+
+let cachedCursorPosition={x:0,y:0},fetchingCursor=false;
+function refreshCursorPosition(){
+  if(fetchingCursor)return;
+  fetchingCursor=true;
+  const binary=path.join(__dirname,'native','get-cursor');
+  if(fs.existsSync(binary)){
+    execFile(binary,{timeout:300,encoding:'utf8'},(err,stdout)=>{
+      fetchingCursor=false;
+      if(!err&&stdout){
+        const [x,y]=stdout.trim().split(/\s+/).map(Number);
+        if(Number.isFinite(x)&&Number.isFinite(y))cachedCursorPosition={x,y};
+      }
+    });
+  }else fetchingCursor=false;
 }
 function getCursorPosition(){
-  if(process.platform==='linux'){
-    const binary=path.join(__dirname,'native','get-cursor');
+  if(typeof screen!=='undefined'&&screen.getCursorScreenPoint){
     try{
-      const {execFileSync}=require('node:child_process');
-      if(fs.existsSync(binary)){
-        const out=execFileSync(binary,{timeout:200,encoding:'utf8'}).trim();
-        const [x,y]=out.split(/\s+/).map(Number);
-        if(Number.isFinite(x)&&Number.isFinite(y))return{x,y};
-      }
-    }catch{}
-    try{
-      const {execFileSync}=require('node:child_process');
-      const py="import ctypes; x11=ctypes.cdll.LoadLibrary('libX11.so.6'); x11.XOpenDisplay.restype=ctypes.c_void_p; x11.XOpenDisplay.argtypes=[ctypes.c_char_p]; x11.XDefaultRootWindow.restype=ctypes.c_ulong; x11.XDefaultRootWindow.argtypes=[ctypes.c_void_p]; x11.XQueryPointer.restype=ctypes.c_int; x11.XQueryPointer.argtypes=[ctypes.c_void_p,ctypes.c_ulong,ctypes.POINTER(ctypes.c_ulong),ctypes.POINTER(ctypes.c_ulong),ctypes.POINTER(ctypes.c_int),ctypes.POINTER(ctypes.c_int),ctypes.POINTER(ctypes.c_int),ctypes.POINTER(ctypes.c_int),ctypes.POINTER(ctypes.c_uint)]; x11.XCloseDisplay.argtypes=[ctypes.c_void_p]; d=x11.XOpenDisplay(None)\nif d:\n r,c=ctypes.c_ulong(),ctypes.c_ulong(); rx,ry,wx,wy=ctypes.c_int(),ctypes.c_int(),ctypes.c_int(),ctypes.c_int(); m=ctypes.c_uint()\n if x11.XQueryPointer(d,x11.XDefaultRootWindow(d),ctypes.byref(r),ctypes.byref(c),ctypes.byref(rx),ctypes.byref(ry),ctypes.byref(wx),ctypes.byref(wy),ctypes.byref(m)): print(f'{rx.value} {ry.value}')\n x11.XCloseDisplay(d)";
-      const out=execFileSync('python3',['-c',py],{timeout:300,encoding:'utf8'}).trim();
-      const [x,y]=out.split(/\s+/).map(Number);
-      if(Number.isFinite(x)&&Number.isFinite(y))return{x,y};
+      const pt=screen.getCursorScreenPoint();
+      if(pt&&(pt.x!==0||pt.y!==0))return pt;
     }catch{}
   }
+  if(process.platform==='linux'){
+    refreshCursorPosition();
+    if(cachedCursorPosition.x!==0||cachedCursorPosition.y!==0)return cachedCursorPosition;
+  }
   return(typeof screen!=='undefined'&&screen.getCursorScreenPoint)?screen.getCursorScreenPoint():{x:0,y:0};
+}
+
+let cachedActiveOutputName='',lastActiveOutputFetch=0,fetchingActiveOutput=false;
+function refreshActiveOutputName(){
+  if(fetchingActiveOutput)return;
+  fetchingActiveOutput=true;
+  execFile('busctl',['--user','call','org.kde.KWin','/KWin','org.kde.KWin','activeOutputName'],{timeout:1000,encoding:'utf8'},(err,stdout)=>{
+    fetchingActiveOutput=false;
+    if(err||!stdout)return;
+    const match=stdout.match(/s\s+"([^"]+)"/);
+    if(match){cachedActiveOutputName=match[1];lastActiveOutputFetch=Date.now();}
+  });
 }
 function getActiveDisplay(cursor=null){
   if(typeof screen!=='undefined'){
     const displays=screen.getAllDisplays();
     if(displays.length<=1)return displays[0]||screen.getPrimaryDisplay();
-    if(process.platform==='linux'){
-      try{
-        const {execFileSync}=require('node:child_process');
-        const out=execFileSync('busctl',['--user','call','org.kde.KWin','/KWin','org.kde.KWin','activeOutputName'],{timeout:400,encoding:'utf8'});
-        const match=out.match(/s\s+"([^"]+)"/);
-        if(match){
-          const activeName=match[1],outputs=getLinuxOutputs(),target=outputs.get(activeName);
-          if(target){const found=displays.find(d=>d.bounds.x===target.x&&d.bounds.y===target.y);if(found)return found;}
-        }
-      }catch{}
-    }
     if(cursor&&Number.isFinite(cursor.x)&&Number.isFinite(cursor.y)){
       const found=displays.find(d=>cursor.x>=d.bounds.x&&cursor.x<d.bounds.x+d.bounds.width&&cursor.y>=d.bounds.y&&cursor.y<d.bounds.y+d.bounds.height);
       if(found)return found;
       return screen.getDisplayNearestPoint(cursor);
+    }
+    if(process.platform==='linux'){
+      const now=Date.now();
+      if(!lastActiveOutputFetch||now-lastActiveOutputFetch>2000){
+        refreshActiveOutputName();
+      }
+      if(cachedActiveOutputName){
+        const outputs=getLinuxOutputs(),target=outputs.get(cachedActiveOutputName);
+        if(target){const found=displays.find(d=>d.bounds.x===target.x&&d.bounds.y===target.y);if(found)return found;}
+      }
     }
   }
   return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
@@ -192,9 +221,11 @@ async function show(next='shelves',event=null) {
     if(next==='mini'&&cursor&&Number.isFinite(cursor.x)&&Number.isFinite(cursor.y)){
       const originX=display.workArea?.x??display.bounds.x;
       const originY=display.workArea?.y??display.bounds.y;
-      if(cursor.x>=originX&&cursor.x<originX+display.workArea.width&&cursor.y>=originY&&cursor.y<originY+display.workArea.height){
-        mousePos={x:cursor.x-originX,y:cursor.y-originY,screenWidth:display.workArea.width,screenHeight:display.workArea.height};
-      }
+      const areaW=display.workArea?.width??display.bounds.width;
+      const areaH=display.workArea?.height??display.bounds.height;
+      const relX=Math.max(0,Math.min(cursor.x-originX,areaW-1));
+      const relY=Math.max(0,Math.min(cursor.y-originY,areaH-1));
+      mousePos={x:relX,y:relY,screenWidth:areaW,screenHeight:areaH};
     }
     viewEvent=event?{...event,...(mousePos?{mousePosition:mousePos}:{}),serial:crypto.randomUUID()}:(mousePos?{mousePosition:mousePos,serial:crypto.randomUUID()}:null);
     applyingBounds=true;
@@ -242,28 +273,113 @@ async function hide(restore=true) {
 async function clipboardContent() {
   return readClipboardContent({clipboard,sequence:()=>native.clipboardSequence(),marker:copyMarker,plainURL});
 }
-async function readClipboard() {
-  if(capturing){pendingClipboard=true;return;}if(!store||closing||!['captureText','captureImages','captureLinks'].some(key=>store.data.settings[key]))return;capturing=true;
+
+function enqueueClipboard(event) {
+  if(!store||closing||!['captureText','captureImages','captureLinks'].some(key=>store.data.settings[key]))return;
+  clipboardQueue.push(event);
+  void processClipboardQueue();
+}
+
+async function processClipboardQueue() {
+  if(processingClipboard)return;
+  processingClipboard=true;
   try{
-    const content=await clipboardContent();
-    if(!content){ console.log('[ClipBoardLine] clipboardContent returned null'); return; }
-    if(content.raced){pendingClipboard=true;return;}
-    if(content.fingerprint===lastFingerprint){ return; }
-    lastFingerprint=content.fingerprint;
-    if(content.fingerprint===ownFingerprint){ownFingerprint='';return;}
-    if(content.owned)return;
-    const key={image:'captureImages',text:'captureText',link:'captureLinks'}[content.kind];if(!store.data.settings[key])return;
-    if(content.kind==='image'){
-      if(!Buffer.isBuffer(content.value)||content.value.length<24||content.value.subarray(0,8).toString('hex')!=='89504e470d0a1a0a'){
-        return;
+    while(clipboardQueue.length>0){
+      if(!store||closing||!['captureText','captureImages','captureLinks'].some(key=>store.data.settings[key])){
+        clipboardQueue.length=0;break;
+      }
+      const rawEvent=clipboardQueue.shift();
+      try{
+        await handleClipboardEvent(rawEvent);
+      }catch(error){
+        console.error('[ClipBoardLine] capture error:', error);
       }
     }
-    console.log('[ClipBoardLine] Captured new clipboard item:', content.kind, content.kind === 'image' ? (content.value?.length + ' bytes') : content.value);
-    const item=store.insert(content.kind,content.value);broadcast();
-    if(item.kind==='link')void enrich(item.id);
-    if(item.kind==='image'){queueOCR(item.id);refreshImageSearch();}
-  }catch(error){notify('Clipboard capture: '+error.message);console.error('[ClipBoardLine] capture error:', error);}finally{capturing=false;if(pendingClipboard){pendingClipboard=false;queueMicrotask(()=>void readClipboard());}}
+  }finally{
+    processingClipboard=false;
+  }
 }
+
+async function handleClipboardEvent(rawEvent) {
+  let content = null;
+
+  if (rawEvent && typeof rawEvent === 'object' && Array.isArray(rawEvent.types)) {
+    if (rawEvent.origin === 'clipboardline') return;
+    if (privateClipboard(rawEvent.types)) return;
+
+    let kind = null, value = null, html = null, fingerprint = rawEvent.fingerprint || null;
+
+    if (rawEvent.image_path && (rawEvent.types.includes('image/png') || rawEvent.types.some(t => t.startsWith('image/')))) {
+      if (!store.data.settings.captureImages) return;
+      try {
+        const buf = await fs.promises.readFile(rawEvent.image_path);
+        if (buf && buf.length >= 24 && buf.subarray(0, 8).toString('hex') === '89504e470d0a1a0a') {
+          kind = 'image';
+          value = buf;
+          if (!fingerprint) {
+            fingerprint = 'image:' + crypto.createHash('sha256').update(buf).digest('hex');
+          }
+        }
+      } catch (err) {
+        console.error('[ClipBoardLine] Failed to read daemon cached image:', err);
+      }
+    }
+
+    if (!kind && rawEvent.text) {
+      if (typeof rawEvent.text === 'string' && /\P{White_Space}/u.test(rawEvent.text)) {
+        const bytes = Buffer.from(rawEvent.text, 'utf8');
+        if (bytes.length <= 1024 * 1024) {
+          const url = plainURL(rawEvent.text);
+          kind = url ? 'link' : 'text';
+          value = url || rawEvent.text;
+          if (rawEvent.html && typeof rawEvent.html === 'string' && rawEvent.html.length <= 2 * 1024 * 1024) {
+            html = rawEvent.html;
+          }
+          if (!fingerprint) {
+            fingerprint = kind + ':' + crypto.createHash('sha256').update(bytes).digest('hex');
+          }
+        }
+      }
+    }
+
+    if (kind && value && fingerprint) {
+      content = { kind, value, html, owned: false, fingerprint };
+    }
+  }
+
+  if (!content) {
+    content = await clipboardContent();
+  }
+
+  if (!content || content.raced || content.owned) return;
+
+  if (content.fingerprint === lastFingerprint) return;
+  lastFingerprint = content.fingerprint;
+  if (content.fingerprint === ownFingerprint) {
+    ownFingerprint = '';
+    return;
+  }
+
+  const key = { image: 'captureImages', text: 'captureText', link: 'captureLinks' }[content.kind];
+  if (!store.data.settings[key]) return;
+
+  if (content.kind === 'image') {
+    if (!Buffer.isBuffer(content.value) || content.value.length < 24 || content.value.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') {
+      return;
+    }
+  }
+
+  console.log('[ClipBoardLine] Captured new clipboard item:', content.kind, content.kind === 'image' ? (content.value?.length + ' bytes') : (content.value?.slice ? content.value.slice(0, 80) : ''));
+  const item = store.insert(content.kind, content.value, { html: content.html });
+  broadcast();
+  if (item.kind === 'link') void enrich(item.id);
+  if (item.kind === 'image') {
+    queueOCR(item.id);
+    refreshImageSearch();
+  }
+}
+
+const readClipboard = (event) => enqueueClipboard(event);
 async function enrich(id,{refresh=false}={}) {
   if(!store.data.settings.fetchLinkMetadata||(!refresh&&pending.has(id)))return;
   const generation=Symbol(id);pending.set(id,generation);
@@ -292,7 +408,12 @@ async function writeClipboard(selected) {
     await native.copyImages({files:images.map(item=>store.mediaPath(item.id)),marker:copyMarker.toString('base64'),text:values.join('\n\n')});
     ownFingerprint=(await clipboardContent())?.fingerprint||'';lastFingerprint=ownFingerprint;store.markCopied(selected.filter(item=>store.data.items.includes(item)).map(item=>item.id));return;
   }
-  const data={'web application/x.clipboardline':new Blob([copyMarker])};if(values.length)data['text/plain']=new Blob([values.join('\n\n')],{type:'text/plain'});
+  const data={'web application/x.clipboardline':new Blob([copyMarker])};
+  data['application/x-orkun-origin'] = new Blob([JSON.stringify({app: 'clipboardline'})], {type: 'application/x-orkun-origin'});
+  if(values.length)data['text/plain']=new Blob([values.join('\n\n')],{type:'text/plain'});
+  if(selected.length===1&&selected[0].html){
+    data['text/html']=new Blob([selected[0].html],{type:'text/html'});
+  }
   if(images.length){const image=nativeImage.createFromPath(store.mediaPath(images[0].id));if(image.isEmpty())throw new Error('Image unavailable');data['image/png']=new Blob([image.toPNG()],{type:'image/png'});}
   await clipboard.write([new ClipboardItem(data)]);
   ownFingerprint=(await clipboardContent())?.fingerprint||'';lastFingerprint=ownFingerprint;store.markCopied(selected.filter(item=>store.data.items.includes(item)).map(item=>item.id));
@@ -347,16 +468,19 @@ async function capture() {
     if(process.platform === 'linux') {
       const tempShot = path.join(require('node:os').tmpdir(), 'clipboardline-shot-' + Date.now() + '.png');
       try {
-        const { execFileSync } = require('node:child_process');
         if (fs.existsSync('/usr/bin/spectacle')) {
-          execFileSync('/usr/bin/spectacle', ['-m', '-b', '-n', '-o', tempShot], { timeout: 5000 });
+          await new Promise((resolve) => {
+            execFile('/usr/bin/spectacle', ['-m', '-b', '-n', '-o', tempShot], { timeout: 5000 }, resolve);
+          });
         } else if (fs.existsSync('/usr/bin/grim')) {
           const g = `${activeDisplay.bounds.x},${activeDisplay.bounds.y} ${activeDisplay.bounds.width}x${activeDisplay.bounds.height}`;
-          execFileSync('/usr/bin/grim', ['-g', g, tempShot], { timeout: 5000 });
+          await new Promise((resolve) => {
+            execFile('/usr/bin/grim', ['-g', g, tempShot], { timeout: 5000 }, resolve);
+          });
         }
         if (fs.existsSync(tempShot)) {
-          pngBuffer = fs.readFileSync(tempShot);
-          try { fs.unlinkSync(tempShot); } catch {}
+          pngBuffer = await fs.promises.readFile(tempShot);
+          try { await fs.promises.unlink(tempShot); } catch {}
         }
       } catch {}
     }
@@ -602,7 +726,7 @@ else app.whenReady().then(async()=>{
   window.webContents.on('render-process-gone',()=>finishShortcutRecording());
   window.webContents.on('did-start-navigation',()=>finishShortcutRecording());
   await window.loadURL(entry);
-  monitor=native.monitor(()=>{if(!testMode)void readClipboard();},error=>{monitor?.kill();monitor=null;pasteTargets.clear();if(!closing)notify(error.message+' Falling back to bounded clipboard polling.');},focus=>pasteTargets.observe(focus));
+  monitor=native.monitor(event=>{if(!testMode)void enqueueClipboard(event);},error=>{monitor?.kill();monitor=null;pasteTargets.clear();if(!closing)notify(error.message+' Falling back to bounded clipboard polling.');},focus=>pasteTargets.observe(focus));
   if(!testMode||testTray){
     if(process.platform==='win32')app.setAppUserModelId('com.clipboardline.desktop.windows');
     createTray();

@@ -1023,7 +1023,7 @@ document.addEventListener('keydown',async event=>{
   }
   if(event.key==='ArrowLeft'||event.key==='ArrowRight'){
    const isSearch=document.activeElement&&document.activeElement.id==='mini-search-input';
-   if(isSearch&&document.activeElement.value){
+   if(isSearch&&document.activeElement.value&&!event.altKey){
     const {selectionStart,selectionEnd,value}=document.activeElement;
     if(selectionStart!==selectionEnd)return;
     if(event.key==='ArrowLeft'&&selectionStart>0)return;
