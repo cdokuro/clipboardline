@@ -1,3 +1,4 @@
+#!/usr/bin/env xdg-open
 [Desktop Entry]
 Name=ClipBoardLine
 Comment=Keyboard-first local clipboard shelves and saved library

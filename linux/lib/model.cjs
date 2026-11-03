@@ -12,7 +12,7 @@ const KINDS = ['image', 'text', 'link'];
 const DEFAULTS = Object.freeze({
   visibleKinds: KINDS, captureText: true, captureImages: true, captureLinks: true,fetchLinkMetadata:true,
   retentionDays: {image: 30, text: 30, link: 30},
-  shortcuts: {toggle: 'Alt+Shift+C', search: 'Alt+Shift+F', library:'', copyLatest:'', screenshot: 'Alt+Shift+S', mini: 'Alt+Super+V'},
+  shortcuts: {toggle: 'Alt+Shift+V', search: 'Alt+Shift+F', library:'', copyLatest:'', screenshot: 'Alt+Shift+S', mini: 'Alt+Super+V'},
   localShortcuts: {},
   autoCheckUpdates: true, watchFolders: [], openAfterScreenshot: true,
   theme:'soft', cardSize:'medium', sounds:false, launchAtLogin:false, language:'system',indexImages:true,
@@ -125,6 +125,7 @@ class Store {
     if(item.captureRevision!=null)ids([item.captureRevision]);if(item.trashRevision!=null)ids([item.trashRevision]);
     ids([item.id]); if (!KINDS.includes(item.kind) || !Array.isArray(item.folderIds) || !Array.isArray(item.tags)) fail('Invalid library record');
     if (item.text != null) text(item.text, 1024 * 1024, true);
+    if (item.html != null) text(item.html, 2 * 1024 * 1024, true);
     if(item.note!=null)text(item.note,1024*1024,true);
     if(item.retainedAt!=null&&(!Number.isFinite(item.retainedAt)||item.retainedAt<0))fail('Invalid saved timestamp');
     if(item.lastCopiedAt!=null&&(!Number.isFinite(item.lastCopiedAt)||item.lastCopiedAt<0))fail('Invalid copy timestamp');
@@ -253,10 +254,11 @@ class Store {
     const prior = matching.sort((a, b) => b.updatedAt - a.updatedAt)[0];
     if(!prior&&this.data.items.length>=20000)fail('Library item limit reached');
     const now = this.clock();
-    const item = prior || {id: crypto.randomUUID(), kind, text: textValue, url, title: '', name: '', pinned: false, folderIds: [], tags: [],
+    const item = prior || {id: crypto.randomUUID(), kind, text: textValue, html: extra.html ? text(extra.html, 2 * 1024 * 1024, true) : '', url, title: '', name: '', pinned: false, folderIds: [], tags: [],
       imageFile, renderedFile: '', ocrText: '', annotations: [], crop: null, note:'', retainedAt:null, lastCopiedAt:null, createdAt: now, updatedAt: now, trashedAt: null, hiddenFromShelf: false};
     item.createdAt = now; item.updatedAt = now; item.hiddenFromShelf = false;item.captureRevision=crypto.randomUUID();
     if(kind==='text')item.text=textValue;
+    if (extra.html !== undefined) item.html = extra.html ? text(extra.html, 2 * 1024 * 1024, true) : '';
     if (extra.title) item.title = text(extra.title, 500, true);
     if (matching.length > 1) {
       item.pinned ||= matching.some(i => i.pinned);
@@ -392,7 +394,7 @@ class Store {
       } else if (action === 'remove') { if (saved(item)) item.hiddenFromShelf = true; else{item.trashedAt = now;item.trashRevision=crypto.randomUUID();} }
       else if (action === 'trash') item.trashedAt = now;
       else if (action === 'restore') { item.trashedAt = null; item.trashRevision=null; item.hiddenFromShelf = false; }
-      else if (action === 'editText') { if (item.kind !== 'text') fail('Only text can be edited'); item.text = text(payload.text, 1024 * 1024, true); }
+      else if (action === 'editText') { if (item.kind !== 'text') fail('Only text can be edited'); item.text = text(payload.text, 1024 * 1024, true); if (payload.html !== undefined) item.html = payload.html ? text(payload.html, 2 * 1024 * 1024, true) : ''; }
       else if (action === 'saveImage') {
         if (item.kind !== 'image' || item.recording || typeof payload.dataUrl !== 'string' || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(payload.dataUrl) || payload.dataUrl.length > 90_000_000) fail('Invalid image edit');
         const annotations = payload.annotations ?? []; const crop = payload.crop ?? null;

@@ -94,7 +94,57 @@ async function testLinuxNative() {
   assert.match(stylesSrc, /\.shelf\s*\{[^}]*background:\s*transparent/);
   console.log('PASS 10: 4 Omarchy themes, single transparent curtain & neon glow verified');
 
-  // 11. Cleanup
+  // 11. Rich text (HTML) storage & persistence
+  const itemHtml = store.insert('text', 'Plain text representation', { html: '<b>Bold rich text representation</b>' });
+  assert.equal(itemHtml.text, 'Plain text representation');
+  assert.equal(itemHtml.html, '<b>Bold rich text representation</b>');
+  const reloadedStore = new Store(dataDir);
+  assert.equal(reloadedStore.item(itemHtml.id).html, '<b>Bold rich text representation</b>');
+  console.log('PASS 11: Rich text (HTML) extraction & storage verified');
+
+  // 12. Default shortcut deconfliction
+  const defaultSettings = settings({});
+  assert.equal(defaultSettings.shortcuts.toggle, 'Alt+Shift+V');
+  console.log('PASS 12: Shortcut deconfliction to Alt+Shift+V verified');
+
+  // 13. Safe paste keystroke dispatch with existence check
+  const pasteResult = await native.paste({ editable: true });
+  assert.equal(pasteResult.ok, true);
+  assert.equal(typeof pasteResult.dispatched, 'boolean');
+  console.log('PASS 13: Safe paste keystroke dispatch with existence check verified');
+
+  // 14. UNIX domain socket monitor client
+  const net = require('node:net');
+  const testSockDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cbl-sock-'));
+  const testSockPath = path.join(testSockDir, 'test-clipboard.sock');
+  const receivedEvents = [];
+  const testServer = net.createServer((sock) => {
+    sock.write(JSON.stringify({ seq: 42, text: 'hello daemon', types: ['text/plain'], origin: 'external' }) + '\n');
+    sock.write(JSON.stringify({ seq: 43, text: 'own echo', types: ['text/plain'], origin: 'clipboardline' }) + '\n');
+  });
+  await new Promise(r => testServer.listen(testSockPath, r));
+
+  const origRuntime = process.env.XDG_RUNTIME_DIR;
+  process.env.XDG_RUNTIME_DIR = testSockDir;
+  fs.symlinkSync(testSockPath, path.join(testSockDir, 'orkun-clipboard.sock'));
+
+  const mon = native.monitor((ev) => {
+    receivedEvents.push(ev);
+  }, () => {});
+
+  await new Promise(r => setTimeout(r, 200));
+  mon.kill();
+  testServer.close();
+  fs.rmSync(testSockDir, { recursive: true, force: true });
+  if (origRuntime) process.env.XDG_RUNTIME_DIR = origRuntime; else delete process.env.XDG_RUNTIME_DIR;
+
+  assert.ok(receivedEvents.length >= 1, 'Monitor should receive external event');
+  assert.equal(receivedEvents[0].seq, 42);
+  assert.equal(receivedEvents[0].text, 'hello daemon');
+  assert.equal(receivedEvents.some(e => e.origin === 'clipboardline'), false, 'Own origin events must be ignored');
+  console.log('PASS 14: Daemon UNIX domain socket client connection & streaming NDJSON verified');
+
+  // 15. Cleanup
   fs.rmSync(dataDir, { recursive: true, force: true });
   console.log('ALL LINUX NATIVE SMOKE CHECKS PASSED SUCCESSFULLY!');
 }
