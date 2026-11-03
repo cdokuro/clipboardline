@@ -112,45 +112,34 @@ function trusted(event) {
 function rememberNormalBounds(){if(window&&view!=='shelves'&&view!=='capture'&&!applyingBounds&&!window.isMinimized()){normalBounds=window.getNormalBounds();normalMaximized=window.isMaximized();}}
 function fitNormalBounds(area){const width=Math.min(area.width,normalBounds?.width||1180),height=Math.min(area.height,normalBounds?.height||800);return{width,height,x:Math.min(area.x+area.width-width,Math.max(area.x,normalBounds?.x??Math.round(area.x+(area.width-width)/2))),y:Math.min(area.y+area.height-height,Math.max(area.y,normalBounds?.y??Math.round(area.y+(area.height-height)/2)))};}
 function fitCaptureBounds(area){const width=Math.min(area.width-48,Math.max(780,Math.round(area.width*0.76))),height=Math.min(area.height-48,Math.max(540,Math.round(area.height*0.76)));return{width,height,x:Math.round(area.x+(area.width-width)/2),y:Math.round(area.y+(area.height-height)/2)};}
-let cachedLinuxOutputs=new Map(),lastLinuxOutputsFetch=0,fetchingOutputs=false;
-function refreshLinuxOutputs(){
-  if(fetchingOutputs)return;
-  fetchingOutputs=true;
-  execFile('kscreen-doctor',['-j'],{timeout:2000,encoding:'utf8'},(err,stdout)=>{
-    fetchingOutputs=false;
-    if(err||!stdout)return;
-    try{
-      const data=JSON.parse(stdout);const map=new Map();
-      for(const out of data.outputs||[]){
-        if(out.enabled&&out.pos)map.set(out.name,{x:out.pos.x,y:out.pos.y,width:out.size?.width||0,height:out.size?.height||0});
-      }
-      cachedLinuxOutputs=map;lastLinuxOutputsFetch=Date.now();
-    }catch{}
-  });
-}
+let cachedLinuxOutputs=new Map(),lastLinuxOutputsFetch=0;
 function getLinuxOutputs(){
   const now=Date.now();
-  if(!lastLinuxOutputsFetch||now-lastLinuxOutputsFetch>4000){
-    refreshLinuxOutputs();
-  }
-  return cachedLinuxOutputs;
+  if(cachedLinuxOutputs.size>0&&now-lastLinuxOutputsFetch<5000)return cachedLinuxOutputs;
+  try{
+    const {execFileSync}=require('node:child_process');
+    const stdout=execFileSync('kscreen-doctor',['-j'],{timeout:500,encoding:'utf8'});
+    const data=JSON.parse(stdout);const map=new Map();
+    for(const out of data.outputs||[]){
+      if(out.enabled&&out.pos&&out.size){
+        map.set(out.name,{x:out.pos.x,y:out.pos.y,width:out.size.width,height:out.size.height});
+      }
+    }
+    if(map.size>0){cachedLinuxOutputs=map;lastLinuxOutputsFetch=now;}
+    return cachedLinuxOutputs;
+  }catch{return cachedLinuxOutputs;}
 }
 
-let cachedCursorPosition={x:0,y:0},fetchingCursor=false;
-function refreshCursorPosition(){
-  if(fetchingCursor)return;
-  fetchingCursor=true;
-  const binary=path.join(__dirname,'native','get-cursor');
-  if(fs.existsSync(binary)){
-    execFile(binary,{timeout:300,encoding:'utf8'},(err,stdout)=>{
-      fetchingCursor=false;
-      if(!err&&stdout){
-        const [x,y]=stdout.trim().split(/\s+/).map(Number);
-        if(Number.isFinite(x)&&Number.isFinite(y))cachedCursorPosition={x,y};
-      }
-    });
-  }else fetchingCursor=false;
+function getLinuxActiveOutputName(){
+  if(process.platform!=='linux')return null;
+  try{
+    const {execFileSync}=require('node:child_process');
+    const out=execFileSync('busctl',['--user','call','org.kde.KWin','/KWin','org.kde.KWin','activeOutputName'],{timeout:250,encoding:'utf8'}).trim();
+    const match=out.match(/s\s+"([^"]+)"/);
+    return match?match[1]:null;
+  }catch{return null;}
 }
+
 function getCursorPosition(){
   if(typeof screen!=='undefined'&&screen.getCursorScreenPoint){
     try{
@@ -158,45 +147,32 @@ function getCursorPosition(){
       if(pt&&(pt.x!==0||pt.y!==0))return pt;
     }catch{}
   }
-  if(process.platform==='linux'){
-    refreshCursorPosition();
-    if(cachedCursorPosition.x!==0||cachedCursorPosition.y!==0)return cachedCursorPosition;
-  }
-  return(typeof screen!=='undefined'&&screen.getCursorScreenPoint)?screen.getCursorScreenPoint():{x:0,y:0};
+  return null;
 }
 
-let cachedActiveOutputName='',lastActiveOutputFetch=0,fetchingActiveOutput=false;
-function refreshActiveOutputName(){
-  if(fetchingActiveOutput)return;
-  fetchingActiveOutput=true;
-  execFile('busctl',['--user','call','org.kde.KWin','/KWin','org.kde.KWin','activeOutputName'],{timeout:1000,encoding:'utf8'},(err,stdout)=>{
-    fetchingActiveOutput=false;
-    if(err||!stdout)return;
-    const match=stdout.match(/s\s+"([^"]+)"/);
-    if(match){cachedActiveOutputName=match[1];lastActiveOutputFetch=Date.now();}
-  });
-}
 function getActiveDisplay(cursor=null){
   if(typeof screen!=='undefined'){
     const displays=screen.getAllDisplays();
     if(displays.length<=1)return displays[0]||screen.getPrimaryDisplay();
+    if(process.platform==='linux'){
+      const activeName=getLinuxActiveOutputName();
+      if(activeName){
+        const outputs=getLinuxOutputs(),target=outputs.get(activeName);
+        if(target){
+          const found=displays.find(d=>d.bounds.x===target.x&&d.bounds.y===target.y);
+          if(found)return found;
+          const bySize=displays.find(d=>d.bounds.width===target.width&&d.bounds.height===target.height);
+          if(bySize)return bySize;
+        }
+      }
+    }
     if(cursor&&Number.isFinite(cursor.x)&&Number.isFinite(cursor.y)){
       const found=displays.find(d=>cursor.x>=d.bounds.x&&cursor.x<d.bounds.x+d.bounds.width&&cursor.y>=d.bounds.y&&cursor.y<d.bounds.y+d.bounds.height);
       if(found)return found;
       return screen.getDisplayNearestPoint(cursor);
     }
-    if(process.platform==='linux'){
-      const now=Date.now();
-      if(!lastActiveOutputFetch||now-lastActiveOutputFetch>2000){
-        refreshActiveOutputName();
-      }
-      if(cachedActiveOutputName){
-        const outputs=getLinuxOutputs(),target=outputs.get(cachedActiveOutputName);
-        if(target){const found=displays.find(d=>d.bounds.x===target.x&&d.bounds.y===target.y);if(found)return found;}
-      }
-    }
   }
-  return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  return screen.getPrimaryDisplay();
 }
 async function show(next='shelves',event=null) {
   cancelRecordingTrims();
@@ -223,9 +199,11 @@ async function show(next='shelves',event=null) {
       const originY=display.workArea?.y??display.bounds.y;
       const areaW=display.workArea?.width??display.bounds.width;
       const areaH=display.workArea?.height??display.bounds.height;
-      const relX=Math.max(0,Math.min(cursor.x-originX,areaW-1));
-      const relY=Math.max(0,Math.min(cursor.y-originY,areaH-1));
-      mousePos={x:relX,y:relY,screenWidth:areaW,screenHeight:areaH};
+      if(cursor.x>=originX&&cursor.x<originX+areaW&&cursor.y>=originY&&cursor.y<originY+areaH){
+        const relX=Math.max(0,Math.min(cursor.x-originX,areaW-1));
+        const relY=Math.max(0,Math.min(cursor.y-originY,areaH-1));
+        mousePos={x:relX,y:relY,screenWidth:areaW,screenHeight:areaH};
+      }
     }
     viewEvent=event?{...event,...(mousePos?{mousePosition:mousePos}:{}),serial:crypto.randomUUID()}:(mousePos?{mousePosition:mousePos,serial:crypto.randomUUID()}:null);
     applyingBounds=true;
