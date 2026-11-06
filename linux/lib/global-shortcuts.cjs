@@ -35,11 +35,29 @@ function qtKeyCode(accelerator){
  return base?(mods|base)>>>0:0;
 }
 
-function createLinuxShortcutRegistry(fallbackRegistry){
+// kglobalaccel çağrıları ana Electron sürecinde senkron çalışır (register()
+// sözleşmesi senkron). Normalde her çağrı ~2 ms; kglobalaccel takılırsa
+// (ör. Plasma yeniden başlarken) her biri zaman aşımına kadar bekler. Kısa
+// zaman aşımı + ilk ETIMEDOUT'ta devre kesici: en kötü donma ~timeoutMs.
+const KDE_CALL_TIMEOUT_MS=400;
+
+function createLinuxShortcutRegistry(fallbackRegistry,{exec=execFileSync,spawn:spawnProcess=spawn,timeoutMs=KDE_CALL_TIMEOUT_MS}={}){
  if(process.platform!=='linux')return fallbackRegistry;
+ let kdeDown=false;
+ const busctl=(args,options={})=>{
+  if(kdeDown)throw new Error('kglobalaccel unavailable (timed out earlier)');
+  try{return exec('busctl',['--user',...args],{...options,timeout:timeoutMs});}
+  catch(error){
+   if(error&&error.code==='ETIMEDOUT'&&!kdeDown){
+    kdeDown=true;
+    console.warn('[ClipBoardLine] kglobalaccel timed out after '+timeoutMs+' ms; using fallback shortcuts for this session.');
+   }
+   throw error;
+  }
+ };
  let kdeAvailable=false;
  try{
-  execFileSync('busctl',['--user','status','org.kde.kglobalaccel'],{stdio:'ignore',timeout:1500});
+  busctl(['status','org.kde.kglobalaccel'],{stdio:'ignore'});
   kdeAvailable=true;
  }catch{}
  if(!kdeAvailable)return fallbackRegistry;
@@ -50,16 +68,16 @@ function createLinuxShortcutRegistry(fallbackRegistry){
 
  // Clean up any old registrations from previous sessions
  try{
-  const out=execFileSync('busctl',['--user','call','org.kde.kglobalaccel','/component/clipboardline','org.kde.kglobalaccel.Component','shortcutNames'],{encoding:'utf8',timeout:1500,stdio:['ignore','pipe','ignore']});
+  const out=busctl(['call','org.kde.kglobalaccel','/component/clipboardline','org.kde.kglobalaccel.Component','shortcutNames'],{encoding:'utf8',stdio:['ignore','pipe','ignore']});
   const matches=[...out.matchAll(/"([^"]+)"/g)].map(m=>m[1]);
   for(const oldKey of matches){
-   try{execFileSync('busctl',['--user','call','org.kde.kglobalaccel','/kglobalaccel','org.kde.KGlobalAccel','unregister','ss','clipboardline',oldKey],{stdio:'ignore',timeout:1500});}catch{}
+   try{busctl(['call','org.kde.kglobalaccel','/kglobalaccel','org.kde.KGlobalAccel','unregister','ss','clipboardline',oldKey],{stdio:'ignore'});}catch{}
   }
  }catch{}
 
  function ensureMonitor(){
   if(monitorProc)return;
-  monitorProc=spawn('dbus-monitor',['--session',"type='signal',path='/component/clipboardline',interface='org.kde.kglobalaccel.Component',member='globalShortcutPressed'"],{stdio:['ignore','pipe','ignore']});
+  monitorProc=spawnProcess('dbus-monitor',['--session',"type='signal',path='/component/clipboardline',interface='org.kde.kglobalaccel.Component',member='globalShortcutPressed'"],{stdio:['ignore','pipe','ignore']});
   monitorProc.unref?.();
   monitorProc.stdout.on('data',chunk=>{
    buffer+=chunk.toString('utf8');
@@ -80,18 +98,18 @@ function createLinuxShortcutRegistry(fallbackRegistry){
  return {
   register(key,callback){
    const code=qtKeyCode(key);
-   if(!code)return fallbackRegistry.register(key,callback);
+   if(!code||kdeDown)return fallbackRegistry.register(key,callback);
    try{
     const registerOne=(k,c)=>{
-     const check=execFileSync('busctl',['--user','call','org.kde.kglobalaccel','/kglobalaccel','org.kde.KGlobalAccel','getGlobalShortcutsByKey','i',String(c)],{encoding:'utf8',timeout:2000}).trim();
+     const check=busctl(['call','org.kde.kglobalaccel','/kglobalaccel','org.kde.KGlobalAccel','getGlobalShortcutsByKey','i',String(c)],{encoding:'utf8'}).trim();
      if(!check.startsWith('a(ssssssaiai) 0')){
       const strings=[...check.matchAll(/"([^"]*)"/g)].map(m=>m[1]);
       for(let i=0;i+2<strings.length;i+=6){
        if(strings[i+2]&&strings[i+2]!=='clipboardline')return false;
       }
      }
-     execFileSync('busctl',['--user','call','org.kde.kglobalaccel','/kglobalaccel','org.kde.KGlobalAccel','doRegister','as','4','clipboardline',k,'ClipBoardLine','ClipBoardLine '+k],{stdio:'ignore',timeout:2000});
-     const res=execFileSync('busctl',['--user','call','org.kde.kglobalaccel','/kglobalaccel','org.kde.KGlobalAccel','setShortcut','asaiu','4','clipboardline',k,'ClipBoardLine','ClipBoardLine '+k,'1',String(c),'6'],{encoding:'utf8',timeout:2000}).trim();
+     busctl(['call','org.kde.kglobalaccel','/kglobalaccel','org.kde.KGlobalAccel','doRegister','as','4','clipboardline',k,'ClipBoardLine','ClipBoardLine '+k],{stdio:'ignore'});
+     const res=busctl(['call','org.kde.kglobalaccel','/kglobalaccel','org.kde.KGlobalAccel','setShortcut','asaiu','4','clipboardline',k,'ClipBoardLine','ClipBoardLine '+k,'1',String(c),'6'],{encoding:'utf8'}).trim();
      if(!res.includes(String(c)) && !res.startsWith('ai 0') && !res.includes('ai'))return false;
      callbacks.set(k,callback);
      return true;
@@ -105,8 +123,9 @@ function createLinuxShortcutRegistry(fallbackRegistry){
   },
   unregister(key){
    callbacks.delete(key);
+   if(kdeDown){try{fallbackRegistry.unregister(key);}catch{}return;}
    try{
-    execFileSync('busctl',['--user','call','org.kde.kglobalaccel','/kglobalaccel','org.kde.KGlobalAccel','unregister','ss','clipboardline',key],{stdio:'ignore',timeout:2000});
+    busctl(['call','org.kde.kglobalaccel','/kglobalaccel','org.kde.KGlobalAccel','unregister','ss','clipboardline',key],{stdio:'ignore'});
    }catch{
     try{fallbackRegistry.unregister(key);}catch{}
    }
