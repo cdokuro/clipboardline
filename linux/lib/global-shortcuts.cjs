@@ -121,6 +121,13 @@ function createLinuxShortcutRegistry(fallbackRegistry,{exec=execFileSync,spawn:s
     return fallbackRegistry.register(key,callback);
    }
   },
+  // Kapanışta dbus-monitor'ü sonlandır: unref edildiği için aksi halde uygulama
+  // çıktıktan sonra yetim kalır (bir sonraki kısayol sinyaline kadar yaşar).
+  dispose(){
+   callbacks.clear();
+   const proc=monitorProc;monitorProc=null;
+   if(proc){try{proc.kill();}catch{}}
+  },
   unregister(key){
    callbacks.delete(key);
    if(kdeDown){try{fallbackRegistry.unregister(key);}catch{}return;}
@@ -169,6 +176,6 @@ class GlobalShortcuts{
   }
   return rejected;
  }
- dispose(){this.disposed=true;this.leases.clear();for(const[action,key]of this.registered){if(this.active.has(action)){try{this.registry.unregister(key);}catch{}}}this.active.clear();this.epochs.clear();this.registered.clear();}
+ dispose(){this.disposed=true;this.leases.clear();for(const[action,key]of this.registered){if(this.active.has(action)){try{this.registry.unregister(key);}catch{}}}this.active.clear();this.epochs.clear();this.registered.clear();try{this.registry.dispose?.();}catch{}}
 }
 module.exports={GlobalShortcuts,ACTIONS,createLinuxShortcutRegistry,qtKeyCode};
