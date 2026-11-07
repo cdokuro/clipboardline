@@ -602,7 +602,8 @@ async function command(action,payload={}) {
     await writeClipboard([item]).catch(()=>{});
     if(store.data.settings.sounds)shell.beep();
     queueOCR(item.id);refreshImageSearch();
-    await show('shelves',{selectId:item.id,kind:'image',freshlyCaptured:true});
+    // Kaydedince ClipBoardLine öne gelmesin: gizle ve odağı önceki uygulamaya ver
+    await hide();
     result={id:item.id};
   }
   else if(action==='cancelCapture'){

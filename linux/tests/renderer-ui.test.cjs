@@ -26,7 +26,7 @@ function fixture({deferInitialState=false,initialVisible=true,queuedAnimationFra
   constructor(){super();this.naturalWidth=imageRaster.width;this.naturalHeight=imageRaster.height;this.complete=true;}
   set src(value){imageLoads.push({url:value,crossOrigin:this.crossOrigin});if(this.onload)queueMicrotask(()=>this.onload());}
  }
- const document={body:new Element('body'),activeElement:null,querySelectorAll(){return[];},getElementById(id){if(!nodes.has(id))nodes.set(id,id==='markup-canvas'?new Canvas(id):new Element(id));return nodes.get(id);},createElement(tag){return tag==='canvas'?new Canvas():new Element();},querySelector(){return null;},addEventListener(name,listener){if(!listeners.has(name))listeners.set(name,[]);listeners.get(name).push(listener);}};
+ const document={body:new Element('body'),activeElement:null,querySelectorAll(){return[];},getElementById(id){if(!nodes.has(id))nodes.set(id,(id==='markup-canvas'||id==='capture-canvas')?new Canvas(id):new Element(id));return nodes.get(id);},createElement(tag){return tag==='canvas'?new Canvas():new Element();},querySelector(){return null;},addEventListener(name,listener){if(!listeners.has(name))listeners.set(name,[]);listeners.get(name).push(listener);}};
  const image='00000000-0000-4000-8000-000000000001',text1='00000000-0000-4000-8000-000000000002',text2='00000000-0000-4000-8000-000000000003',link='00000000-0000-4000-8000-000000000004';
  const base=(id,kind,createdAt,extra)=>({id,kind,createdAt,updatedAt:createdAt,name:'',title:'',text:'',url:'',pinned:false,folderIds:[],tags:[],trashedAt:null,hiddenFromShelf:false,...extra});
  const state={items:[base(image,'image',1000,{name:'Synthetic image',...(imageDocument?{annotations:[],crop:null}:{}),mediaUrl:'appmedia://media/'+image,originalMediaUrl:'appmedia://media/'+image+'/original'}),base(text1,'text',900,{text:'Text one'}),base(text2,'text',800,{text:'Text two'}),base(link,'link',700,{url:'https://example.com/reference',title:'Reference link'})],folders:[],settings:{visibleKinds:['image','text','link'],retentionDays:{image:30,text:30,link:30},shortcuts:{toggle:'Control+Alt+Space',search:'Control+Alt+S'},localShortcuts:{},language:'en',theme:'soft',cardSize:'medium'},view:'shelves',version:'1.7.0',windowVisible:initialVisible,canUndo:false,canUndoTrash:false,libraryRevision:0};
@@ -708,4 +708,24 @@ test('IME composing Enter Escape and arrows stay native in Library search, text 
 
 test('an old shortcut save completion cannot close a newer recorder or release its owned global-shortcut lease',async()=>{
  const f=fixture();await f.ready();await f.api.command('settings');await f.ready();await f.click('record-local',{keyAction:'pin'});await f.ready();await f.key('KeyO');const release=f.deferReply('setSettings');await f.click('confirm-modal');await f.key('Escape');await f.click('record-local',{keyAction:'copy'});await f.ready();const begin=f.commands.filter(value=>value.action==='beginShortcutRecording').at(-1);assert.ok(begin);release();await f.ready();assert.match(f.overlay,/Record shortcut/);assert.equal(f.commands.some(value=>value.action==='endShortcutRecording'&&value.payload.token===begin.payload.token),false);await f.key('Escape');assert.equal(f.commands.some(value=>value.action==='endShortcutRecording'&&value.payload.token===begin.payload.token),true);
+});
+
+// Kırpma modu (Alt+Shift+S): seçimden sonra Ctrl+C de Enter gibi kaydedip
+// panoya kopyalar ve kırpma ekranını kapatır; metin aracında yazarken Ctrl+C
+// normal metin kopyalamasında kalır.
+function captureFixture(){const f=fixture();f.api.surface({view:'capture',windowVisible:true,pendingCapture:{id:'cap-1',dataUrl:'data:image/png;base64,AAAA',width:900,height:220}});return f;}
+test('capture: Ctrl+C commits the capture like Enter (copies and closes)',async()=>{
+ const f=captureFixture();await f.ready();
+ await f.key('KeyC',{ctrl:true});
+ assert.equal(f.commands.filter(value=>value.action==='commitCapture').length,1);
+});
+test('capture: Ctrl+C inside a text annotation editor does not commit',async()=>{
+ const f=captureFixture();await f.ready();
+ await f.key('KeyC',{ctrl:true,target:f.editor('capture-text')});
+ assert.equal(f.commands.filter(value=>value.action==='commitCapture').length,0);
+});
+test('capture: Enter still commits exactly once',async()=>{
+ const f=captureFixture();await f.ready();
+ await f.key('Enter');
+ assert.equal(f.commands.filter(value=>value.action==='commitCapture').length,1);
 });

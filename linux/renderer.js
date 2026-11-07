@@ -1060,6 +1060,8 @@ document.addEventListener('keydown',async event=>{
  if(ui.view==='capture'){
   if(event.key==='Escape'){event.preventDefault();await cancelCaptureSession();return;}
   if(event.key==='Enter'&&!event.altKey&&!event.shiftKey){event.preventDefault();await commitCaptureSession();return;}
+  // Ctrl+C = Enter (kaydet, panoya kopyala, kapat); metin notu yazarken normal kopyalama kalsın
+  if(ctrl&&!event.altKey&&!event.shiftKey&&event.key.toLowerCase()==='c'&&!isEditor(event.target)){event.preventDefault();await commitCaptureSession();return;}
   if(ctrl&&event.key.toLowerCase()==='z'){event.preventDefault();captureUndo();return;}
   if(ctrl&&['=','+'].includes(event.key)){event.preventDefault();setCaptureZoom((ui.captureSession?.zoom||1)*1.25);return;}
   if(ctrl&&event.key==='-'){event.preventDefault();setCaptureZoom((ui.captureSession?.zoom||1)/1.25);return;}
