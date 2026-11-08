@@ -10,7 +10,7 @@
  const nextId=doc=>1+doc.annotations.reduce((max,a)=>Math.max(max,Number.isFinite(a.id)?a.id:0),0);
  function createDocument({annotations=[],crop=null}={}){const list=clone(annotations);return{annotations:list,crop:crop?clone(crop):null,selected:null,history:[],redo:[],nextNumber:nextFrom(list)};}
  const snapshot=doc=>({annotations:clone(doc.annotations),crop:doc.crop?clone(doc.crop):null,nextNumber:doc.nextNumber});
- function restore(doc,state){doc.annotations=clone(state.annotations);doc.crop=state.crop?clone(state.crop):null;doc.nextNumber=state.nextNumber;if(doc.selected!=null&&!doc.annotations[doc.selected])doc.selected=null;}
+ function restore(doc,state){doc.annotations=clone(state.annotations);doc.crop=state.crop?clone(state.crop):null;doc.nextNumber=state.nextNumber;doc.selected=null;}
  function checkpoint(doc){doc.history.push(snapshot(doc));if(doc.history.length>HISTORY_LIMIT)doc.history.splice(0,doc.history.length-HISTORY_LIMIT);doc.redo=[];}
  function undo(doc){if(!doc.history.length)return false;doc.redo.push(snapshot(doc));restore(doc,doc.history.pop());return true;}
  function redo(doc){if(!doc.redo.length)return false;doc.history.push(snapshot(doc));restore(doc,doc.redo.pop());return true;}
@@ -69,7 +69,8 @@
   doc.selected=doc.annotations.length-1;return doc.selected;
  }
  function deleteSelected(doc){if(doc.selected==null||!doc.annotations[doc.selected])return false;checkpoint(doc);doc.annotations.splice(doc.selected,1);doc.selected=null;return true;}
- function applyStyle(doc,patch){if(doc.selected==null||!doc.annotations[doc.selected])return false;checkpoint(doc);Object.assign(doc.annotations[doc.selected],patch);return true;}
+ // Only DEFAULT_STYLE keys are applied; identity and geometry (id/type/points/x/y...) never change here.
+ function applyStyle(doc,patch){if(doc.selected==null||!doc.annotations[doc.selected])return false;const style=Object.fromEntries(Object.entries(patch||{}).filter(([key])=>Object.hasOwn(DEFAULT_STYLE,key)));if(!Object.keys(style).length)return false;checkpoint(doc);Object.assign(doc.annotations[doc.selected],style);return true;}
  function setNextNumber(doc,n){doc.nextNumber=Math.max(1,Math.floor(Number(n))||1);}
  // Drawing. Legacy branches reproduce the original renderer call sequence exactly
  // (see tests/fixtures/annotations-golden.json); new style fields are optional.

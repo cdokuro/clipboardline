@@ -106,3 +106,13 @@ test('document survives JSON round-trip',()=>{
  const copy=JSON.parse(JSON.stringify(doc));assert.deepEqual(copy,doc);
  assert.equal(A.undo(copy),true);assert.equal(copy.nextNumber,1);
 });
+test('applyStyle only accepts style keys and never rewrites identity or geometry',()=>{
+ const doc=A.createDocument();draw(doc,'rectangle',{x:0,y:0},{x:40,y:40});doc.selected=0;const before=structuredClone(doc.annotations[0]);
+ assert.equal(A.applyStyle(doc,{id:99,type:'ellipse',points:[{x:1,y:1}],x:500,fillColor:'#00ff00'}),true);
+ const a=doc.annotations[0];assert.deepEqual([a.id,a.type,a.points,a.x],[before.id,before.type,undefined,before.x]);assert.equal(a.fillColor,'#00ff00');
+ const depth=doc.history.length;assert.equal(A.applyStyle(doc,{id:5,type:'pen'}),false);assert.equal(doc.history.length,depth,'no-op patch must not checkpoint');
+});
+test('undo and redo clear the selection',()=>{
+ const doc=A.createDocument();draw(doc,'rectangle',{x:0,y:0},{x:40,y:40});draw(doc,'rectangle',{x:100,y:100},{x:140,y:140});draw(doc,'rectangle',{x:200,y:200},{x:240,y:240});
+ doc.selected=1;A.undo(doc);assert.equal(doc.selected,null);doc.selected=0;A.redo(doc);assert.equal(doc.selected,null);
+});

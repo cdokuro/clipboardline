@@ -6,11 +6,12 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('node:vm');
+const golden=require('./fixtures/annotations-golden.json');
 const crypto=require('node:crypto');
 const {execFileSync}=require('node:child_process');
 
 function fixture({deferInitialState=false,initialVisible=true,queuedAnimationFrames=false,imageRaster={width:900,height:220},imageDocument=false}={}){
- const listeners=new Map(),nodes=new Map(),commands=[],imageLoads=[],animationFrames=[],paintCalls=[];let exportFailures=0;
+ const listeners=new Map(),nodes=new Map(),commands=[],imageLoads=[],animationFrames=[],paintCalls=[],markupCalls=[];let exportFailures=0;
  class Element{
   constructor(id=''){this.id=id;this.innerHTML='';this.textContent='';this.dataset={};this.style={};this.className='';this.value='';this.selectionStart=0;this.selectionEnd=0;this.classList={add(){},remove(){},contains(){return false;}};}
   setAttribute(){}querySelector(){return null;}querySelectorAll(){return [];}focus(){}blur(){}select(){}setSelectionRange(){}scrollIntoView(){}matches(){return false;}closest(){return null;}
@@ -19,7 +20,7 @@ function fixture({deferInitialState=false,initialVisible=true,queuedAnimationFra
  class Canvas extends Element{
   constructor(id=''){super(id);this.width=900;this.height=220;}
   getBoundingClientRect(){return{left:0,top:0,width:900,height:220};}
-  getContext(){const canvas=this;return new Proxy({}, {get(object,key){if(key==='drawImage'||key==='clearRect')return(...args)=>paintCalls.push({canvas:canvas.id,operation:key,source:args[0] instanceof FixtureImage?'original':'other'});return object[key]??(()=>{});},set(object,key,value){object[key]=value;return true;}});}
+  getContext(){const canvas=this,record=entry=>{if(canvas.id==='markup-canvas')markupCalls.push(entry);};return new Proxy({}, {get(object,key){if(key in object)return object[key];return(...args)=>{if(typeof key==='string')record(['call',key,JSON.parse(JSON.stringify(args.map(value=>value instanceof Element?'element':value)))]);if(key==='drawImage'||key==='clearRect')paintCalls.push({canvas:canvas.id,operation:key,source:args[0] instanceof FixtureImage?'original':'other'});};},set(object,key,value){object[key]=value;record(['set',key,value]);return true;}});}
   toDataURL(){if(exportFailures){exportFailures--;throw Object.assign(new Error('Synthetic canvas export rejection'),{name:'SecurityError'});}return 'data:image/png;base64,iVBORw0KGgo=';}
  }
  class FixtureImage extends Element{
@@ -60,7 +61,7 @@ function fixture({deferInitialState=false,initialVisible=true,queuedAnimationFra
  async function pointer(type,x,y){const target=document.getElementById('markup-canvas');for(const listener of listeners.get(type)||[])listener({target,clientX:x,clientY:y,pointerId:1,shiftKey:false,preventDefault(){}});await ready();}
  async function input(id,value){const target=document.getElementById(id);target.value=value;target.selectionStart=value.length;for(const listener of listeners.get('input')||[])await listener({target});await ready();}
  async function change(id,value){const target=document.getElementById(id);target.value=value;for(const listener of listeners.get('change')||[])await listener({target});await ready();}
- return{async cardClick(id,{ctrl=false}={}){const card=new Element();card.dataset.itemId=id;card.closest=selector=>selector==='[data-item-id]'?card:null;for(const listener of listeners.get('click')||[])await listener({target:card,ctrlKey:ctrl,metaKey:false,shiftKey:false,stopPropagation(){}});await ready();},grid(columns){document.querySelectorAll=selector=>selector==='.library-grid > .card'?[...document.getElementById('app').innerHTML.matchAll(/<article class="[^"]*"[^>]*data-item-id="([^"]+)"/g)].map((match,index)=>({offsetTop:Math.floor(index/columns)*200,dataset:{itemId:match[1]}})):[];},editor(id){const node=document.getElementById(id);node.tagName='INPUT';node.matches=selector=>selector.includes('input');return node;},ready,key,input,change,click,pointer,async blur(){for(const listener of listeners.get('window:blur')||[])listener();await ready();},imageLoads,paintCalls,animationFrames,flushAnimationFrames(){for(const fn of animationFrames.splice(0))fn();},releaseInitialState(){releaseInitialState?.();},deferReply(action){let release;const promise=new Promise(resolve=>{release=resolve;});delayedReply={action,promise};return release;},deferImageBroadcast({surface=true}={}){deferredImageBroadcast={surface};},releaseImageBroadcast(){const next=pendingImageBroadcast;pendingImageBroadcast=null;if(next)subscriber?.(next);},failExportOnce(){exportFailures++;},failCleanupOnce(){cleanupFailures++;},failEditOnce(){editFailures++;},state,commands,nodes,image,text1,text2,link,api,get main(){return nodes.get('app').innerHTML;},get overlay(){return nodes.get('overlay-root').innerHTML;}};
+ return{async cardClick(id,{ctrl=false}={}){const card=new Element();card.dataset.itemId=id;card.closest=selector=>selector==='[data-item-id]'?card:null;for(const listener of listeners.get('click')||[])await listener({target:card,ctrlKey:ctrl,metaKey:false,shiftKey:false,stopPropagation(){}});await ready();},grid(columns){document.querySelectorAll=selector=>selector==='.library-grid > .card'?[...document.getElementById('app').innerHTML.matchAll(/<article class="[^"]*"[^>]*data-item-id="([^"]+)"/g)].map((match,index)=>({offsetTop:Math.floor(index/columns)*200,dataset:{itemId:match[1]}})):[];},editor(id){const node=document.getElementById(id);node.tagName='INPUT';node.matches=selector=>selector.includes('input');return node;},ready,key,input,change,click,pointer,async blur(){for(const listener of listeners.get('window:blur')||[])listener();await ready();},imageLoads,paintCalls,markupCalls,animationFrames,flushAnimationFrames(){for(const fn of animationFrames.splice(0))fn();},releaseInitialState(){releaseInitialState?.();},deferReply(action){let release;const promise=new Promise(resolve=>{release=resolve;});delayedReply={action,promise};return release;},deferImageBroadcast({surface=true}={}){deferredImageBroadcast={surface};},releaseImageBroadcast(){const next=pendingImageBroadcast;pendingImageBroadcast=null;if(next)subscriber?.(next);},failExportOnce(){exportFailures++;},failCleanupOnce(){cleanupFailures++;},failEditOnce(){editFailures++;},state,commands,nodes,image,text1,text2,link,api,get main(){return nodes.get('app').innerHTML;},get overlay(){return nodes.get('overlay-root').innerHTML;}};
 }
 
 function selectedCards(f){return [...f.main.matchAll(/<article class="([^"]*)"[^>]*data-item-id="([^"]+)"/g)].filter(match=>match[1].split(' ').includes('selected')).map(match=>match[2]);}
@@ -728,4 +729,51 @@ test('capture: Enter still commits exactly once',async()=>{
  const f=captureFixture();await f.ready();
  await f.key('Enter');
  assert.equal(f.commands.filter(value=>value.action==='commitCapture').length,1);
+});
+
+async function openMarkup(f){await f.ready();await f.key('Space');await f.key('KeyM');}
+async function savedMarkup(f){const before=f.commands.filter(value=>value.action==='saveImage').length;await f.key('KeyS',{ctrl:true});const saves=f.commands.filter(value=>value.action==='saveImage');assert.equal(saves.length,before+1,'markup change must dirty the editor');return saves.at(-1).payload.annotations;}
+async function drag(f,[x0,y0],[x1,y1]){await f.pointer('pointerdown',x0,y0);await f.pointer('pointermove',x1,y1);await f.pointer('pointerup',x1,y1);}
+
+test('editor opens legacy document unchanged',async()=>{
+ const f=fixture();await f.ready();f.api.emit({items:f.state.items.map(value=>value.id===f.image?{...value,annotations:structuredClone(golden.annotations),crop:null}:value)});await openMarkup(f);
+ const calls=f.markupCalls,start=calls.map(call=>call[0]==='call'&&call[1]==='clearRect').lastIndexOf(true);
+ assert.ok(start>=0,'markup overlay painted');assert.deepEqual(calls.slice(start+1),golden.calls);
+ await f.key('KeyS',{ctrl:true});assert.equal(f.commands.filter(value=>value.action==='saveImage').length,0,'opening a legacy document must not dirty it');
+});
+
+test('editor redo with Ctrl+Shift+Z and Ctrl+Y',async()=>{
+ const f=fixture();await openMarkup(f);await f.click('image-tool',{tool:'rectangle'});await drag(f,[100,50],[200,120]);
+ await f.key('KeyZ',{ctrl:true});assert.equal((await savedMarkup(f)).length,0);
+ await f.key('KeyZ',{ctrl:true,shift:true});assert.equal((await savedMarkup(f)).length,1);
+ await f.key('KeyZ',{ctrl:true});assert.equal((await savedMarkup(f)).length,0);
+ await f.key('KeyY',{ctrl:true});const redone=await savedMarkup(f);assert.equal(redone.length,1);assert.equal(redone[0].type,'rectangle');
+});
+
+test('editor Delete removes selected annotation',async()=>{
+ const f=fixture();await openMarkup(f);await f.click('image-tool',{tool:'rectangle'});await drag(f,[100,50],[200,120]);
+ await f.click('image-tool',{tool:'select'});await f.pointer('pointerdown',100,50);await f.pointer('pointerup',100,50);
+ await f.key('Delete',{target:f.editor('fill-color')});assert.equal((await savedMarkup(f)).length,1,'Delete while typing in a control keeps the annotation');
+ await f.key('Delete');assert.equal((await savedMarkup(f)).length,0);
+});
+
+test('editor number tool places 1 then 2',async()=>{
+ const f=fixture();await openMarkup(f);assert.match(f.overlay,/data-action="image-tool"[^>]*data-tool="number"/);await f.click('image-tool',{tool:'number'});
+ await f.pointer('pointerdown',100,100);await f.pointer('pointerup',100,100);await f.pointer('pointerdown',300,100);await f.pointer('pointerup',300,100);
+ const saved=await savedMarkup(f);assert.deepEqual(saved.map(value=>[value.type,value.value,value.x,value.y]),[['number',1,100,100],['number',2,300,100]]);
+});
+
+test('editor blur tool adds blur annotation',async()=>{
+ const f=fixture();await openMarkup(f);assert.match(f.overlay,/data-action="image-tool"[^>]*data-tool="blur"/);assert.match(f.overlay,/data-action="image-tool"[^>]*data-tool="pixelate"/);
+ await f.click('image-tool',{tool:'blur'});f.paintCalls.length=0;await drag(f,[100,50],[300,150]);
+ assert.ok(f.paintCalls.some(value=>value.canvas===''&&value.operation==='drawImage'&&value.source==='original'),'blur samples the decoded original image');
+ const saved=await savedMarkup(f);assert.deepEqual(saved.map(value=>[value.type,value.x,value.y,value.width,value.height,value.strength]),[['blur',100,50,200,100,50]]);
+});
+
+test('editor fill color input edits selected',async()=>{
+ const f=fixture();await openMarkup(f);for(const id of ['fill-color','font-family','font-color','shadow','strength','stamp-number'])assert.match(f.overlay,new RegExp('id="'+id+'"'));
+ await f.click('image-tool',{tool:'rectangle'});await drag(f,[100,50],[200,120]);const drawn=(await savedMarkup(f))[0];
+ await f.click('image-tool',{tool:'select'});await f.pointer('pointerdown',150,50);await f.pointer('pointerup',150,50);
+ await f.input('fill-color','#00ff00');const [edited]=await savedMarkup(f);
+ assert.equal(edited.fillColor,'#00ff00');assert.deepEqual([edited.id,edited.type,edited.x,edited.y,edited.width,edited.height],[drawn.id,drawn.type,drawn.x,drawn.y,drawn.width,drawn.height]);
 });
