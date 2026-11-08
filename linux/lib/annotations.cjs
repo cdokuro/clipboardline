@@ -90,19 +90,44 @@
   if(clip){x0=Math.max(x0,clip.x);y0=Math.max(y0,clip.y);x1=Math.min(x1,clip.x+clip.width);y1=Math.min(y1,clip.y+clip.height);}
   return x1>x0&&y1>y0?{x:x0,y:y0,width:x1-x0,height:y1-y0}:null;
  }
- function drawBlur(ctx,annotation,base,clip){
+ // Render cache: base identity -> bounded Map(key -> offscreen canvas). Engine-internal,
+ // so annotations stay plain JSON. Key = effect + clamped region + radius/cell; a different
+ // rect, clip (changes the region), strength or base misses. Each base keeps at most 32 entries.
+ const renderCache=new WeakMap(),CACHE_LIMIT=32;
+ function cachedRender(base,key,make){
+  if(!base||(typeof base!=='object'&&typeof base!=='function'))return make();
+  let entries=renderCache.get(base);if(!entries){entries=new Map();renderCache.set(base,entries);}
+  if(entries.has(key)){const hit=entries.get(key);entries.delete(key);entries.set(key,hit);return hit;}
+  const made=make();if(!made)return made;
+  entries.set(key,made);if(entries.size>CACHE_LIMIT)entries.delete(entries.keys().next().value);
+  return made;
+ }
+ const defaultCanvas=()=>typeof document==='object'?document.createElement('canvas'):null;
+ function drawBlur(ctx,annotation,base,clip,createCanvas){
   const r=regionOf(annotation,clip);if(!base||!r)return;
+  const make=createCanvas||defaultCanvas;if(typeof make!=='function')return;
+  const radius=blurRadius(annotation.strength);
+  const scratch=cachedRender(base,`blur|${r.x}|${r.y}|${r.width}|${r.height}|${radius}`,()=>{
+   const canvas=make();if(!canvas)return null;canvas.width=Math.ceil(r.width);canvas.height=Math.ceil(r.height);
+   const sctx=canvas.getContext('2d');if(!sctx)return null;
+   sctx.filter=`blur(${radius}px)`;sctx.drawImage(base,r.x,r.y,r.width,r.height,0,0,r.width,r.height);
+   return canvas;
+  });
+  if(!scratch)return;
   ctx.beginPath();ctx.rect(r.x,r.y,r.width,r.height);ctx.clip();
-  ctx.filter=`blur(${blurRadius(annotation.strength)}px)`;
-  ctx.drawImage(base,r.x,r.y,r.width,r.height,r.x,r.y,r.width,r.height);
+  ctx.drawImage(scratch,0,0,r.width,r.height,r.x,r.y,r.width,r.height);
  }
  function drawPixelate(ctx,annotation,base,clip,createCanvas){
   const r=regionOf(annotation,clip);if(!base||!r)return;
-  const make=createCanvas||(typeof document==='object'?()=>document.createElement('canvas'):null);if(!make)return;
+  const make=createCanvas||defaultCanvas;if(typeof make!=='function')return;
   const cell=pixelCell(annotation.strength),cols=Math.ceil(r.width/cell),rows=Math.ceil(r.height/cell);
-  const scratch=make();scratch.width=cols;scratch.height=rows;
-  const sctx=scratch.getContext('2d');if(!sctx)return;
-  sctx.drawImage(base,r.x,r.y,r.width,r.height,0,0,cols,rows);
+  const scratch=cachedRender(base,`pixelate|${r.x}|${r.y}|${r.width}|${r.height}|${cell}`,()=>{
+   const canvas=make();if(!canvas)return null;canvas.width=cols;canvas.height=rows;
+   const sctx=canvas.getContext('2d');if(!sctx)return null;
+   sctx.drawImage(base,r.x,r.y,r.width,r.height,0,0,cols,rows);
+   return canvas;
+  });
+  if(!scratch)return;
   ctx.beginPath();ctx.rect(r.x,r.y,r.width,r.height);ctx.clip();
   ctx.imageSmoothingEnabled=false;
   ctx.drawImage(scratch,0,0,cols,rows,r.x,r.y,cols*cell,rows*cell);
@@ -126,7 +151,7 @@
     context.font=`bold ${size}px ${annotation.fontFamily||'sans-serif'}`;context.textAlign='center';context.textBaseline='middle';
     context.fillText(String(annotation.value),annotation.x,annotation.y);
    }
-   else if(annotation.type==='blur')drawBlur(context,annotation,base,clip);
+   else if(annotation.type==='blur')drawBlur(context,annotation,base,clip,createCanvas);
    else if(annotation.type==='pixelate')drawPixelate(context,annotation,base,clip,createCanvas);
    context.restore();
   }

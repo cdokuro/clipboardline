@@ -64,24 +64,49 @@ test('pixelate draws from base with cell size from strength',()=>{
  assert.ok(weak.made[0].width>f.made[0].width);
 });
 test('blur draws from base with filter from strength',()=>{
- const r=recorder();
- A.drawAnnotations(r.ctx,[{type:'blur',x:10,y:20,width:100,height:60,strength:50}],{base:BASE});
- assert.equal(sets(r.calls,'filter')[0],'blur(10px)');
- const [img,sx,sy,sw,sh,dx,dy,dw,dh]=invoked(r.calls,'drawImage')[0];
- assert.equal(img,BASE);assert.deepEqual([sx,sy,sw,sh],[10,20,100,60]);assert.deepEqual([dx,dy,dw,dh],[10,20,100,60]);
+ const f=scratchFactory(),r=recorder();
+ A.drawAnnotations(r.ctx,[{type:'blur',x:10,y:20,width:100,height:60,strength:50}],{base:{},createCanvas:f.create});
+ const sc=f.made[0];
+ assert.equal(sets(sc.calls,'filter')[0],'blur(10px)');
+ const src=invoked(sc.calls,'drawImage')[0];assert.deepEqual(src.slice(1),[10,20,100,60,0,0,100,60]);
+ const out=invoked(r.calls,'drawImage')[0];assert.equal(out[0],sc);assert.deepEqual(out.slice(1),[0,0,100,60,10,20,100,60]);
 });
 test('blur clamps to clip rect',()=>{
- const r=recorder();
- A.drawAnnotations(r.ctx,[{type:'blur',x:-50,y:0,width:100,height:40,strength:50}],{base:BASE,clip:{x:0,y:0,width:200,height:200}});
- const [,sx,sy,sw,sh]=invoked(r.calls,'drawImage')[0];
- assert.deepEqual([sx,sy,sw,sh],[0,0,50,40]);
+ const f=scratchFactory(),r=recorder();
+ A.drawAnnotations(r.ctx,[{type:'blur',x:-50,y:0,width:100,height:40,strength:50}],{base:{},clip:{x:0,y:0,width:200,height:200},createCanvas:f.create});
+ assert.deepEqual(invoked(f.made[0].calls,'drawImage')[0].slice(1),[0,0,50,40,0,0,50,40]);
+ assert.deepEqual(invoked(r.calls,'drawImage')[0].slice(1),[0,0,50,40,0,0,50,40]);
+ assert.deepEqual(invoked(r.calls,'rect')[0],[0,0,50,40]);
+ assert.equal(invoked(r.calls,'clip').length,1);
+});
+test('pixelate clamps to clip rect',()=>{
+ const f=scratchFactory(),r=recorder();
+ A.drawAnnotations(r.ctx,[{type:'pixelate',x:80,y:-20,width:100,height:60,strength:50}],{base:{},clip:{x:0,y:0,width:100,height:100},createCanvas:f.create});
+ assert.deepEqual(invoked(f.made[0].calls,'drawImage')[0].slice(1,5),[80,0,20,40]);
+ assert.deepEqual(invoked(r.calls,'rect')[0],[80,0,20,40]);
+ assert.equal(invoked(r.calls,'clip').length,1);
+ const up=invoked(r.calls,'drawImage')[0];assert.deepEqual([up[5],up[6]],[80,0]);
+});
+test('blur/pixelate renders are cached per base, rect, clip and strength',()=>{
+ for(const type of['blur','pixelate']){
+  const f=scratchFactory(),base={},ann={type,x:10,y:10,width:50,height:50,strength:50};
+  const run=(a,o={})=>A.drawAnnotations(recorder().ctx,[a],{base,createCanvas:f.create,...o});
+  run(ann);run(ann);assert.equal(f.made.length,1,type+' reused');
+  run({...ann,x:11});assert.equal(f.made.length,2,type+' rect');
+  run(ann,{clip:{x:0,y:0,width:30,height:30}});assert.equal(f.made.length,3,type+' clip');
+  run({...ann,strength:80});assert.equal(f.made.length,4,type+' strength');
+  run(ann,{base:{}});assert.equal(f.made.length,5,type+' base');
+  run(ann);assert.equal(f.made.length,5,type+' original still cached');
+  for(let i=0;i<60;i++)run({...ann,x:100+i});
+  run(ann);assert.ok(f.made.length<=5+60+1,type+' bounded');
+ }
 });
 test('blur handles negative size and draws nothing outside clip or without base',()=>{
  const r=recorder();
- A.drawAnnotations(r.ctx,[{type:'blur',x:60,y:40,width:-40,height:-30,strength:50}],{base:BASE});
- assert.deepEqual(invoked(r.calls,'drawImage')[0].slice(1,5),[20,10,40,30]);
+ A.drawAnnotations(r.ctx,[{type:'blur',x:60,y:40,width:-40,height:-30,strength:50}],{base:BASE,createCanvas:scratchFactory().create});
+ assert.deepEqual(invoked(r.calls,'drawImage')[0].slice(1,5),[0,0,40,30]);
  const out=recorder();
- A.drawAnnotations(out.ctx,[{type:'blur',x:300,y:0,width:20,height:20,strength:50}],{base:BASE,clip:{x:0,y:0,width:100,height:100}});
+ A.drawAnnotations(out.ctx,[{type:'blur',x:300,y:0,width:20,height:20,strength:50}],{base:BASE,clip:{x:0,y:0,width:100,height:100},createCanvas:scratchFactory().create});
  assert.equal(invoked(out.calls,'drawImage').length,0);
  const none=recorder();
  A.drawAnnotations(none.ctx,[{type:'blur',x:0,y:0,width:20,height:20,strength:50},{type:'pixelate',x:0,y:0,width:20,height:20,strength:50}]);
