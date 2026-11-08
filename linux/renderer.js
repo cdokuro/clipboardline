@@ -31,13 +31,14 @@ Object.assign(TR,{'Add':'Ekle'});
 Object.assign(TR,{'Video':'Video','Trim video':'Videoyu kırp','Start time':'Başlangıç','End time':'Bitiş','Wait for the video to load.':'Videonun yüklenmesini bekle.','Saving trimmed video…':'Kırpılan video kaydediliyor…','Saving…':'Kaydediliyor…','Enter saves · Esc cancels':'Enter kaydeder · Esc iptal eder','The trim could not be canceled. Try again.':'Kırpma iptal edilemedi. Tekrar dene.','The video could not be saved. Keep this range and try again.':'Video kaydedilemedi. Bu aralığı koruyup tekrar dene.','Select a still image first.':'Önce bir fotoğraf seç.'});
 Object.assign(TR,{"Copies to clear": "Temizlenecek kopyalar", "%d unsaved copies": "%d kaydedilmemiş kopya", "Clear unsaved copies…": "Kaydedilmemiş kopyaları temizle…", "Clear unsaved copies?": "Kaydedilmemiş kopyalar temizlensin mi?", "%d unsaved copies will move to recoverable Library Trash. Pinned items, saved items, folders, tags and original files are kept.": "%d kaydedilmemiş kopya, Kütüphane’deki geri alınabilir Çöp Kutusu’na taşınacak. Sabitlenen ve kaydedilen öğeler, klasörler, etiketler ve orijinal dosyalar korunur."});
 Object.assign(TR,{"Select area":"Alan seç","Full screen":"Tam ekran","Save to line":"Kaydet ve Askıya As","Drag across any area to capture · Enter saves · Esc cancels":"Alan seçmek için sürükleyin · Kaydet (Enter) ile askıya asın · İptal (Esc)","Zoom in":"Yaklaştır","Zoom out":"Uzaklaştır","Reset zoom":"Yaklaştırmayı sıfırla","Omarchy Gold & Night":"Omarchy Altın & Gece","Omarchy Nord & Emerald":"Omarchy Nord & Zümrüt","Omarchy Catppuccin Mocha":"Omarchy Catppuccin Mocha","Omarchy Rosé Pine & Mars":"Omarchy Rosé Pine & Mercan","Switch theme":"Temayı değiştir"});
+Object.assign(TR,{"Select":"Seç","Select annotation":"İşaret seç","Number stamp":"Numara damgası","Blur":"Bulanıklaştır","Pixelate":"Pikselleştir","Fill color":"Dolgu rengi","Font":"Yazı tipi","Text color":"Metin rengi","Shadow":"Gölge","Drop shadow":"Gölge düşür","Effect strength":"Efekt gücü","Next number":"Sonraki numara","Redo":"Yinele"});
 const ui = {view:'shelves',miniSearch:'',miniFilter:'all',miniActiveId:null,active:'image',selected:new Set(),focus:null,anchor:null,pages:{image:0,text:0,link:0},pinned:{image:false,text:false,link:false},search:'',searchOpen:false,scope:'saved',favoritesOnly:false,type:'all',folder:null,tag:null,filterTags:[],searchMode:'all',days:0,domain:'',sort:'newest',list:false,preview:null,editingText:false,textDraft:'',editor:null,captureSession:null,freshlyCapturedId:null,videoTrim:null,modal:null,settingsTab:'general',historyCleanupKind:'all',shortcutsQuery:'',sidebarVisible:true,inspectorVisible:true,sidebarWidth:220,inspectorWidth:300,listColumns:{title:300,kind:80,tags:150,created:130},filtersOpen:false,selecting:false,searchEditing:false,zoom:1,pan:{x:0,y:0},lastEvent:'',undoFocus:[],busy:false};
 let state = {items:[],folders:[],settings:{visibleKinds:KINDS,retentionDays:{image:30,text:30,link:30},shortcuts:{},localShortcuts:{}},view:'shelves',version:'',canUndo:false};
 const imageHistories=new Map(),inspectorDrafts=new Map();
 let inspectorTimer=null,inspectorSaving=null;
 let textPreviewDraft=null,textPreviewTimer=null,textPreviewSaving=null;
 let libraryImageSearch={key:'',ids:new Set(),scores:new Map(),available:false,indexing:false},imageSearchTimer=null,imageSearchGeneration=0;
-let toastTimer, pointer=null, annotationSequence=0, lastVisibility=null;
+let toastTimer, pointer=null, lastVisibility=null;
 // Shared annotation engine (lib/annotations.cjs, loaded before this script).
 const annotationEngine=window.clipboardLineAnnotations;
 let pendingNativeState=null,nativeTransitionSaving=false,nativeTransitionBlocked=false;
@@ -505,7 +506,8 @@ function updateShelfSelection(){
 function initCaptureSession(pending){
  if(!pending||ui.captureSession?.id===pending.id)return;
  const image=new Image();
- const session={id:pending.id,dataUrl:pending.dataUrl,width:pending.width||window.innerWidth||1920,height:pending.height||window.innerHeight||1080,base:image,crop:null,tool:'crop',annotations:[],history:[],color:'#ff5252',widthPx:7,fontSize:40,fill:false,zoom:1,pan:{x:0,y:0},busy:false};
+ // doc holds annotations, crop, selection and undo/redo; crop gestures stay in this adapter.
+ const session={id:pending.id,dataUrl:pending.dataUrl,width:pending.width||window.innerWidth||1920,height:pending.height||window.innerHeight||1080,base:image,tool:'crop',doc:annotationEngine.createDocument(),style:{...annotationEngine.DEFAULT_STYLE},zoom:1,pan:{x:0,y:0},busy:false};
  ui.captureSession=session;
  image.onload=()=>{if(ui.captureSession===session){session.width=image.naturalWidth||session.width;session.height=image.naturalHeight||session.height;drawCaptureCanvas();}};
  image.src=pending.dataUrl;
@@ -523,11 +525,11 @@ function setCaptureZoom(nextZoom){
  updateCaptureTransform();
 }
 function captureWorkspace(){
- const session=ui.captureSession||{width:window.innerWidth||1920,height:window.innerHeight||1080,tool:'crop',color:'#ff5252',annotations:[],history:[],crop:null,zoom:1,pan:{x:0,y:0},busy:false};
- const crop=session.crop&&session.crop.width>=8&&session.crop.height>=8?session.crop:null;
+ const session=ui.captureSession||{width:window.innerWidth||1920,height:window.innerHeight||1080,tool:'crop',doc:annotationEngine.createDocument(),style:{...annotationEngine.DEFAULT_STYLE},zoom:1,pan:{x:0,y:0},busy:false};
+ const crop=captureCrop(session);
  const sizeText=crop?`${Math.round(crop.width)} × ${Math.round(crop.height)} px`:`${t('Full screen')} · ${session.width} × ${session.height} px`;
- const tools=[['crop','crop','Select area'],['pen','edit','Pen'],['marker','marker','Marker'],['rectangle','rectangle','Rectangle'],['ellipse','ellipse','Ellipse'],['arrow','arrow','Arrow'],['line','line','Line'],['text','text','Text annotation']].map(([tool,symbol,label])=>iconButton('capture-tool',symbol,label,`data-tool="${tool}" aria-pressed="${session.tool===tool}"`)).join('');
- return `<main class="content capture-workspace" id="capture-workspace" aria-label="${attr(t('Screenshot'))}"><div class="capture-hint-pill"><span class="capture-hint-text">${esc(t('Drag across any area to capture · Enter saves · Esc cancels'))}</span><span class="capture-size-badge" id="capture-size-badge">${esc(sizeText)}</span></div><div class="capture-stage" id="capture-stage"><div class="capture-document" id="capture-document" style="transform:translate(${session.pan.x}px,${session.pan.y}px) scale(${session.zoom||1})"><canvas id="capture-canvas" width="${session.width}" height="${session.height}" tabindex="0" aria-label="${attr(t('Screenshot'))}"></canvas></div></div><div class="capture-toolbar" id="capture-toolbar" role="toolbar" aria-label="${attr(t('Screenshot'))}">${tools}<span class="divider"></span><input type="color" id="capture-color" value="${attr(session.color||'#ff5252')}" aria-label="${attr(t('Annotation color'))}">${iconButton('capture-zoom-out','zoomOut','Zoom out')}<button data-action="capture-zoom-reset" class="quiet zoom-badge" id="capture-zoom-badge" title="${attr(t('Reset zoom'))}">${Math.round((session.zoom||1)*100)}%</button>${iconButton('capture-zoom-in','zoomIn','Zoom in')}<span class="divider"></span><button data-action="capture-fullscreen" class="quiet" title="${attr(t('Full screen'))}">${icon('expand')}<span>${esc(t('Full screen'))}</span></button>${iconButton('capture-undo','undo','Undo',session.history.length?'':'disabled')}<span class="divider"></span><button data-action="cancel-capture" class="danger">${icon('close')}<span>${esc(t('Cancel'))}</span><kbd>Esc</kbd></button><button data-action="commit-capture" class="primary" ${session.busy?'disabled':''}>${icon('check')}<span>${esc(t('Save to line'))}</span><kbd>Enter</kbd></button></div></main>`;
+ const tools=[['crop','crop','Select area'],['select','select','Select annotation'],['pen','edit','Pen'],['marker','marker','Marker'],['rectangle','rectangle','Rectangle'],['ellipse','ellipse','Ellipse'],['arrow','arrow','Arrow'],['line','line','Line'],['text','text','Text annotation'],['number','number','Number stamp'],['blur','blur','Blur'],['pixelate','pixelate','Pixelate']].map(([tool,symbol,label])=>iconButton('capture-tool',symbol,label,`data-tool="${tool}" aria-pressed="${session.tool===tool}"`)).join('');
+ return `<main class="content capture-workspace" id="capture-workspace" aria-label="${attr(t('Screenshot'))}"><div class="capture-hint-pill"><span class="capture-hint-text">${esc(t('Drag across any area to capture · Enter saves · Esc cancels'))}</span><span class="capture-size-badge" id="capture-size-badge">${esc(sizeText)}</span></div><div class="capture-stage" id="capture-stage"><div class="capture-document" id="capture-document" style="transform:translate(${session.pan.x}px,${session.pan.y}px) scale(${session.zoom||1})"><canvas id="capture-canvas" width="${session.width}" height="${session.height}" tabindex="0" aria-label="${attr(t('Screenshot'))}"></canvas></div></div><div class="capture-toolbar" id="capture-toolbar" role="toolbar" aria-label="${attr(t('Screenshot'))}">${tools}<span class="divider"></span>${markupStyleControls(session,name=>CAPTURE_CONTROL_IDS[name])}<span class="divider"></span>${iconButton('capture-zoom-out','zoomOut','Zoom out')}<button data-action="capture-zoom-reset" class="quiet zoom-badge" id="capture-zoom-badge" title="${attr(t('Reset zoom'))}">${Math.round((session.zoom||1)*100)}%</button>${iconButton('capture-zoom-in','zoomIn','Zoom in')}<span class="divider"></span><button data-action="capture-fullscreen" class="quiet" title="${attr(t('Full screen'))}">${icon('expand')}<span>${esc(t('Full screen'))}</span></button>${iconButton('capture-undo','undo','Undo',session.doc.history.length?'':'disabled')}${iconButton('capture-redo','redo','Redo',session.doc.redo.length?'':'disabled')}<span class="divider"></span><button data-action="cancel-capture" class="danger">${icon('close')}<span>${esc(t('Cancel'))}</span><kbd>Esc</kbd></button><button data-action="commit-capture" class="primary" ${session.busy?'disabled':''}>${icon('check')}<span>${esc(t('Save to line'))}</span><kbd>Enter</kbd></button></div></main>`;
 }
 function drawCaptureCanvas(){
  const session=ui.captureSession,canvas=document.getElementById('capture-canvas');
@@ -537,8 +539,8 @@ function drawCaptureCanvas(){
  const c=canvas.getContext('2d');
  c.clearRect(0,0,width,height);
  if(session.base?.complete&&session.base.naturalWidth)c.drawImage(session.base,0,0,width,height);
- annotationEngine.drawAnnotations(c,session.annotations);
- const crop=session.crop;
+ annotationEngine.drawAnnotations(c,session.doc.annotations,{base:session.base,clip:captureClip(session,width,height)});
+ const crop=session.doc.crop;
  if(crop&&crop.width>=2&&crop.height>=2){
   c.save();
   c.fillStyle='rgba(0, 0, 0, 0.56)';
@@ -564,8 +566,9 @@ function drawCaptureCanvas(){
   }
   c.restore();
  }
+ drawSelectionOutline(c,session.doc,width);
  const badge=document.getElementById('capture-size-badge');
- if(badge)badge.textContent=crop&&crop.width>=8&&crop.height>=8?`${Math.round(crop.width)} × ${Math.round(crop.height)} px`:`${t('Full screen')} · ${width} × ${height} px`;
+ if(badge)badge.textContent=captureCrop(session)?`${Math.round(crop.width)} × ${Math.round(crop.height)} px`:`${t('Full screen')} · ${width} × ${height} px`;
 }
 function captureCanvasPoint(event){
  const canvas=document.getElementById('capture-canvas');
@@ -573,32 +576,25 @@ function captureCanvasPoint(event){
  const rect=canvas.getBoundingClientRect();
  return{x:Math.max(0,Math.min(canvas.width,(event.clientX-rect.left)/Math.max(1,rect.width)*canvas.width)),y:Math.max(0,Math.min(canvas.height,(event.clientY-rect.top)/Math.max(1,rect.height)*canvas.height))};
 }
-function captureCheckpoint(){
- const session=ui.captureSession;if(!session)return;
- session.history.push({crop:clone(session.crop),annotations:clone(session.annotations)});
- if(session.history.length>60)session.history.shift();
-}
-function captureUndo(){
- const session=ui.captureSession;if(!session||!session.history.length)return;
- const prev=session.history.pop();
- session.crop=clone(prev.crop);
- session.annotations=clone(prev.annotations);
- render();
-}
+// A crop smaller than 8px means full screen. Blur/pixelate sample the decoded screenshot
+// inside that crop (else the whole image); the preview and the committed PNG share both.
+function captureCrop(session){const crop=session.doc.crop;return crop&&crop.width>=8&&crop.height>=8?crop:null;}
+function captureClip(session,width,height){return captureCrop(session)||{x:0,y:0,width,height};}
+function stepCaptureHistory(redo=false){const session=ui.captureSession;if(session&&(redo?annotationEngine.redo:annotationEngine.undo)(session.doc))render();}
 async function commitCaptureSession(){
  const session=ui.captureSession;if(!session||session.busy)return;
  session.busy=true;
  try{
   let dataUrl=session.dataUrl;
   const width=session.base?.naturalWidth||session.width,height=session.base?.naturalHeight||session.height;
-  const hasCrop=session.crop&&session.crop.width>=8&&session.crop.height>=8;
-  if(session.base?.complete&&session.base.naturalWidth&&(hasCrop||session.annotations.length)){
+  const crop=captureCrop(session),annotations=session.doc.annotations;
+  if(session.base?.complete&&session.base.naturalWidth&&(crop||annotations.length)){
    const full=document.createElement('canvas');full.width=width;full.height=height;
    const c=full.getContext('2d');c.drawImage(session.base,0,0,width,height);
-   annotationEngine.drawAnnotations(c,session.annotations);
-   if(hasCrop){
-    const rx=Math.max(0,Math.round(session.crop.x)),ry=Math.max(0,Math.round(session.crop.y));
-    const rw=Math.max(1,Math.min(width-rx,Math.round(session.crop.width))),rh=Math.max(1,Math.min(height-ry,Math.round(session.crop.height)));
+   annotationEngine.drawAnnotations(c,annotations,{base:session.base,clip:captureClip(session,width,height)});
+   if(crop){
+    const rx=Math.max(0,Math.round(crop.x)),ry=Math.max(0,Math.round(crop.y));
+    const rw=Math.max(1,Math.min(width-rx,Math.round(crop.width))),rh=Math.max(1,Math.min(height-ry,Math.round(crop.height)));
     const cropped=document.createElement('canvas');cropped.width=rw;cropped.height=rh;
     cropped.getContext('2d').drawImage(full,rx,ry,rw,rh,0,0,rw,rh);
     dataUrl=cropped.toDataURL('image/png');
@@ -863,7 +859,7 @@ async function confirmModal(){const modal=ui.modal;if(!modal||modal.saving)retur
  if(modal.type==='rename-folder'){if(await command('renameFolder',{id:modal.id,name:modal.value.trim()}))closeModal(modal);return;}
  if(modal.type==='rename-tag'){const name=modal.value.trim();if(await command('renameTag',{tag:modal.tag,name})&&ui.modal===modal){if(ui.scope==='tag'&&ui.tag===modal.tag)ui.tag=name;ui.filterTags=[...new Set(ui.filterTags.map(tag=>tag===modal.tag?name:tag))];closeModal(modal);reconcileLibraryFocus();render();}return;}
  if(modal.type==='new-note'){const result=await command('newNote',{text:modal.value||'New note'});if(result&&ui.modal===modal){closeModal(modal);ui.scope='saved';ui.favoritesOnly=false;ui.type='all';ui.days=0;ui.domain='';ui.search='';ui.filterTags=[];ui.searchMode='all';await command('library');if(result.result?.id){select(item(result.result.id));await openPreview(result.result.id);ui.textDraft=item(result.result.id)?.text||'';ui.editingText=true;renderOverlay();setTimeout(()=>document.getElementById('text-editor')?.focus(),0);}}return;}
- if(modal.type==='annotation'){if(ui.view==='capture'&&ui.captureSession&&modal.value){captureCheckpoint();ui.captureSession.annotations.push({id:++annotationSequence,type:'text',x:modal.x,y:modal.y,text:modal.value,color:ui.captureSession.color,fontSize:ui.captureSession.fontSize||40,widthPx:ui.captureSession.widthPx||7});closeModal(modal);render();return;}if(ui.editor&&modal.value){const doc=ui.editor.doc;if(modal.annotationIndex!=null&&doc.annotations[modal.annotationIndex]?.type==='text'){annotationEngine.checkpoint(doc);doc.annotations[modal.annotationIndex].text=modal.value;}else annotationEngine.addText(doc,{x:modal.x,y:modal.y},modal.value,ui.editor.style);ui.editor.dirty=true;}closeModal(modal);drawEditor();return;}
+ if(modal.type==='annotation'){if(ui.view==='capture'&&ui.captureSession&&modal.value){annotationEngine.addText(ui.captureSession.doc,{x:modal.x,y:modal.y},modal.value,ui.captureSession.style);closeModal(modal);render();return;}if(ui.editor&&modal.value){const doc=ui.editor.doc;if(modal.annotationIndex!=null&&doc.annotations[modal.annotationIndex]?.type==='text'){annotationEngine.checkpoint(doc);doc.annotations[modal.annotationIndex].text=modal.value;}else annotationEngine.addText(doc,{x:modal.x,y:modal.y},modal.value,ui.editor.style);ui.editor.dirty=true;}closeModal(modal);drawEditor();return;}
  }finally{modal.saving=false;}}
 async function perform(action,capturedIds=null,capturedFocus=null){if(ui.videoTrim&&!['markup','actions','pin','name','folder','tag'].includes(action)&&!await cancelVideoTrim())return;if(!await flushInspectorDrafts())return;const ids=capturedIds||selectedIds(),focused=capturedFocus||ui.preview||ui.focus;const value=item(ids.includes(focused)?focused:ids[0]);switch(action){
 case 'shelves':if(!await flushPreview())break;releaseShortcutRecording(ui.modal);ui.editor=null;ui.editingText=false;ui.search='';ui.searchOpen=false;ui.preview=null;ui.modal=null;await command('show');focusFirst();render();break;
@@ -969,13 +965,20 @@ function clearEditorMarkup({annotations=true,crop=false}={}){const editor=ui.edi
 const MARKUP_FONTS=['sans-serif','serif','monospace','cursive'];
 const MARKUP_STYLE_CONTROLS={'ink-color':['color',target=>target.value],'fill-color':['fillColor',target=>target.value],'font-color':['fontColor',target=>target.value],'ink-width':['widthPx',target=>Number(target.value)],'text-size':['fontSize',target=>Number(target.value)],'font-family':['fontFamily',target=>MARKUP_FONTS.includes(target.value)?target.value:annotationEngine.DEFAULT_STYLE.fontFamily],'ink-fill':['fill',target=>!!target.checked],'shadow':['shadow',target=>!!target.checked],'strength':['strength',target=>Math.max(1,Math.min(100,Number(target.value)||annotationEngine.DEFAULT_STYLE.strength))]};
 const MARKUP_STYLE_TYPES={fontSize:['text','number'],fontFamily:['text','number'],fontColor:['text'],strength:['blur','pixelate']};
-function setMarkupStyle(control){const editor=ui.editor,[key,read]=MARKUP_STYLE_CONTROLS[control.id];const value=read(control);editor.style[key]=value;const doc=editor.doc,selected=doc.annotations[doc.selected];if(!selected||MARKUP_STYLE_TYPES[key]&&!MARKUP_STYLE_TYPES[key].includes(selected.type))return;if(annotationEngine.applyStyle(doc,{[key]:value})){editor.dirty=true;drawEditor();}}
-function markupStyleControls(editor){const s=editor.style,doc=editor.doc,kind=editor.tool==='select'?doc.annotations[doc.selected]?.type:editor.tool,off=types=>types.includes(kind)?'':'disabled',sized=['text','number'];return `<input type="color" id="ink-color" value="${attr(s.color)}" aria-label="${attr(t('Annotation color'))}"><select id="ink-width" aria-label="${attr(t('Stroke width'))}">${[3,7,14,25].map(width=>`<option value="${width}" ${s.widthPx===width?'selected':''}>${width}px</option>`).join('')}</select><label class="check-label">${esc(t('Fill'))}<input type="checkbox" id="ink-fill" ${s.fill?'checked':''} aria-label="${attr(t('Fill shapes'))}" ${off(['rectangle','ellipse'])}></label><input type="color" id="fill-color" value="${attr(s.fillColor)}" aria-label="${attr(t('Fill color'))}" ${off(['rectangle','ellipse','number'])}><select id="text-size" aria-label="${attr(t('Text size'))}" ${off(sized)}>${[24,40,64,96].map(size=>`<option value="${size}" ${s.fontSize===size?'selected':''}>${size}px</option>`).join('')}</select><select id="font-family" aria-label="${attr(t('Font'))}" ${off(sized)}>${MARKUP_FONTS.map(font=>`<option value="${attr(font)}" ${s.fontFamily===font?'selected':''}>${esc(font)}</option>`).join('')}</select><input type="color" id="font-color" value="${attr(s.fontColor)}" aria-label="${attr(t('Text color'))}" ${off(['text'])}><label class="check-label">${esc(t('Shadow'))}<input type="checkbox" id="shadow" ${s.shadow?'checked':''} aria-label="${attr(t('Drop shadow'))}" ${off(['line','arrow','rectangle','ellipse','text'])}></label><input type="range" id="strength" min="1" max="100" value="${s.strength}" aria-label="${attr(t('Effect strength'))}" ${off(['blur','pixelate'])}><input type="number" id="stamp-number" min="1" step="1" value="${doc.nextNumber}" aria-label="${attr(t('Next number'))}" ${editor.tool==='number'?'':'disabled'}>`;}
+// The Library editor and the capture overlay are both markup surfaces ({tool,doc,style}).
+// Capture renders the same controls under capture- ids so no DOM id is shared.
+const CAPTURE_CONTROL_IDS={'ink-color':'capture-color','ink-width':'capture-width','ink-fill':'capture-fill','fill-color':'capture-fill-color','text-size':'capture-text-size','font-family':'capture-font-family','font-color':'capture-font-color','shadow':'capture-shadow','strength':'capture-strength','stamp-number':'capture-stamp-number'};
+const CAPTURE_CONTROL_NAMES=Object.fromEntries(Object.entries(CAPTURE_CONTROL_IDS).map(([name,id])=>[id,name]));
+function markupControl(target){const captureName=CAPTURE_CONTROL_NAMES[target.id];if(captureName)return ui.captureSession?{surface:ui.captureSession,name:captureName,changed:drawCaptureCanvas}:null;if(ui.editor&&(MARKUP_STYLE_CONTROLS[target.id]||target.id==='stamp-number'))return{surface:ui.editor,name:target.id,changed:()=>{ui.editor.dirty=true;drawEditor();}};return null;}
+// A style picked with any tool but select is for the next shape; only select edits the selection.
+function setMarkupStyle({surface,name,changed},control){const [key,read]=MARKUP_STYLE_CONTROLS[name];const value=read(control);surface.style[key]=value;const doc=surface.doc,selected=surface.tool==='select'?doc.annotations[doc.selected]:null;if(!selected||MARKUP_STYLE_TYPES[key]&&!MARKUP_STYLE_TYPES[key].includes(selected.type))return;if(annotationEngine.applyStyle(doc,{[key]:value}))changed();}
+function markupStyleControls(surface,id=name=>name){const s=surface.style,doc=surface.doc,kind=surface.tool==='select'?doc.annotations[doc.selected]?.type:surface.tool,off=types=>types.includes(kind)?'':'disabled',sized=['text','number'];return `<input type="color" id="${id('ink-color')}" value="${attr(s.color)}" aria-label="${attr(t('Annotation color'))}"><select id="${id('ink-width')}" aria-label="${attr(t('Stroke width'))}">${[3,7,14,25].map(width=>`<option value="${width}" ${s.widthPx===width?'selected':''}>${width}px</option>`).join('')}</select><label class="check-label">${esc(t('Fill'))}<input type="checkbox" id="${id('ink-fill')}" ${s.fill?'checked':''} aria-label="${attr(t('Fill shapes'))}" ${off(['rectangle','ellipse'])}></label><input type="color" id="${id('fill-color')}" value="${attr(s.fillColor)}" aria-label="${attr(t('Fill color'))}" ${off(['rectangle','ellipse','number'])}><select id="${id('text-size')}" aria-label="${attr(t('Text size'))}" ${off(sized)}>${[24,40,64,96].map(size=>`<option value="${size}" ${s.fontSize===size?'selected':''}>${size}px</option>`).join('')}</select><select id="${id('font-family')}" aria-label="${attr(t('Font'))}" ${off(sized)}>${MARKUP_FONTS.map(font=>`<option value="${attr(font)}" ${s.fontFamily===font?'selected':''}>${esc(font)}</option>`).join('')}</select><input type="color" id="${id('font-color')}" value="${attr(s.fontColor)}" aria-label="${attr(t('Text color'))}" ${off(['text'])}><label class="check-label">${esc(t('Shadow'))}<input type="checkbox" id="${id('shadow')}" ${s.shadow?'checked':''} aria-label="${attr(t('Drop shadow'))}" ${off(['line','arrow','rectangle','ellipse','text'])}></label><input type="range" id="${id('strength')}" min="1" max="100" value="${s.strength}" aria-label="${attr(t('Effect strength'))}" ${off(['blur','pixelate'])}><input type="number" id="${id('stamp-number')}" min="1" step="1" value="${doc.nextNumber}" aria-label="${attr(t('Next number'))}" ${surface.tool==='number'?'':'disabled'}>`;}
 // Retain the decoded original and its native image layer. Pointer samples only
 // update the transparent vector/crop overlay; export still flattens at full size.
 function mountEditorDocument(editor,retained){const placeholder=document.getElementById('markup-canvas')?.closest('.image-document');if(!placeholder)return;if(retained?.markupEditor===editor){placeholder.replaceWith(retained);retained.style.transform=`translate(${ui.pan.x}px,${ui.pan.y}px) scale(${ui.zoom})`;}else{placeholder.markupEditor=editor;const image=document.getElementById('markup-base');editor.base.id='markup-base';editor.base.alt='';editor.base.draggable=false;editor.base.setAttribute('aria-hidden','true');if(image!==editor.base)image?.replaceWith(editor.base);}}
 function drawEditor(){const editor=ui.editor;if(!editor||editor.redrawPending)return;editor.redrawPending=true;requestAnimationFrame(()=>{editor.redrawPending=false;if(ui.editor===editor)paintEditor(editor);});}
-function paintEditor(editor){const canvas=document.getElementById('markup-canvas');if(!canvas||!editor.base.complete||!editor.base.naturalWidth)return;const width=editor.base.naturalWidth,height=editor.base.naturalHeight;if(width*height>80000000){toast('Image exceeds the editable pixel limit.');return;}if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}const c=canvas.getContext('2d');c.clearRect(0,0,width,height);annotationEngine.drawAnnotations(c,editor.doc.annotations,{base:editor.base,clip:{x:0,y:0,width,height}});if(editor.tool==='crop'&&editor.doc.crop){const b=editor.doc.crop;c.save();c.fillStyle='#0009';c.fillRect(0,0,width,b.y);c.fillRect(0,b.y+b.height,width,height-b.y-b.height);c.fillRect(0,b.y,b.x,b.height);c.fillRect(b.x+b.width,b.y,width-b.x-b.width,b.height);c.strokeStyle='#95d5ff';c.lineWidth=Math.max(2,width/500);c.strokeRect(b.x,b.y,b.width,b.height);const size=Math.max(10,width/90);for(const [x,y]of[[b.x,b.y],[b.x+b.width/2,b.y],[b.x+b.width,b.y],[b.x,b.y+b.height/2],[b.x+b.width,b.y+b.height/2],[b.x,b.y+b.height],[b.x+b.width/2,b.y+b.height],[b.x+b.width,b.y+b.height]]){c.fillStyle='#ffffff';c.fillRect(x-size/2,y-size/2,size,size);}c.restore();}const selected=editor.doc.annotations[editor.doc.selected];if(selected){const b=annotationEngine.annotationBounds(selected);c.save();c.strokeStyle='#84c8ff';c.lineWidth=Math.max(2,width/700);c.setLineDash([width/130,width/200]);c.strokeRect(b.x-7,b.y-7,b.width+14,b.height+14);c.setLineDash([]);c.fillStyle='#bde7ff';const size=Math.max(12,width/80);c.fillRect(b.x+b.width-size/2,b.y+b.height-size/2,size,size);c.restore();}canvas.dataset.overlayReady='true';}
+function drawSelectionOutline(c,doc,width){const selected=doc.annotations[doc.selected];if(selected){const b=annotationEngine.annotationBounds(selected);c.save();c.strokeStyle='#84c8ff';c.lineWidth=Math.max(2,width/700);c.setLineDash([width/130,width/200]);c.strokeRect(b.x-7,b.y-7,b.width+14,b.height+14);c.setLineDash([]);c.fillStyle='#bde7ff';const size=Math.max(12,width/80);c.fillRect(b.x+b.width-size/2,b.y+b.height-size/2,size,size);c.restore();}}
+function paintEditor(editor){const canvas=document.getElementById('markup-canvas');if(!canvas||!editor.base.complete||!editor.base.naturalWidth)return;const width=editor.base.naturalWidth,height=editor.base.naturalHeight;if(width*height>80000000){toast('Image exceeds the editable pixel limit.');return;}if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}const c=canvas.getContext('2d');c.clearRect(0,0,width,height);annotationEngine.drawAnnotations(c,editor.doc.annotations,{base:editor.base,clip:{x:0,y:0,width,height}});if(editor.tool==='crop'&&editor.doc.crop){const b=editor.doc.crop;c.save();c.fillStyle='#0009';c.fillRect(0,0,width,b.y);c.fillRect(0,b.y+b.height,width,height-b.y-b.height);c.fillRect(0,b.y,b.x,b.height);c.fillRect(b.x+b.width,b.y,width-b.x-b.width,b.height);c.strokeStyle='#95d5ff';c.lineWidth=Math.max(2,width/500);c.strokeRect(b.x,b.y,b.width,b.height);const size=Math.max(10,width/90);for(const [x,y]of[[b.x,b.y],[b.x+b.width/2,b.y],[b.x+b.width,b.y],[b.x,b.y+b.height/2],[b.x+b.width,b.y+b.height/2],[b.x,b.y+b.height],[b.x+b.width/2,b.y+b.height],[b.x+b.width,b.y+b.height]]){c.fillStyle='#ffffff';c.fillRect(x-size/2,y-size/2,size,size);}c.restore();}drawSelectionOutline(c,editor.doc,width);canvas.dataset.overlayReady='true';}
 function canvasPoint(event){const canvas=document.getElementById('markup-canvas');const rect=canvas.getBoundingClientRect();return{x:Math.max(0,Math.min(canvas.width,(event.clientX-rect.left)/rect.width*canvas.width)),y:Math.max(0,Math.min(canvas.height,(event.clientY-rect.top)/rect.height*canvas.height))};}
 function within(point,rect,padding=0){return point.x>=rect.x-padding&&point.x<=rect.x+rect.width+padding&&point.y>=rect.y-padding&&point.y<=rect.y+rect.height+padding;}
 function cropEdges(point,rect,tolerance){if(!rect||!within(point,rect,tolerance))return null;const edges={};if(Math.abs(point.x-rect.x)<=tolerance)edges.left=true;else if(Math.abs(point.x-rect.x-rect.width)<=tolerance)edges.right=true;if(Math.abs(point.y-rect.y)<=tolerance)edges.top=true;else if(Math.abs(point.y-rect.y-rect.height)<=tolerance)edges.bottom=true;return Object.keys(edges).length?edges:null;}
@@ -1064,13 +1067,14 @@ document.addEventListener('keydown',async event=>{
   if(event.key==='Enter'&&!event.altKey&&!event.shiftKey){event.preventDefault();await commitCaptureSession();return;}
   // Ctrl+C = Enter (kaydet, panoya kopyala, kapat); metin notu yazarken normal kopyalama kalsın
   if(ctrl&&!event.altKey&&!event.shiftKey&&event.key.toLowerCase()==='c'&&!isEditor(event.target)){event.preventDefault();await commitCaptureSession();return;}
-  if(ctrl&&event.key.toLowerCase()==='z'){event.preventDefault();captureUndo();return;}
+  if(ctrl&&event.key.toLowerCase()==='z'){event.preventDefault();stepCaptureHistory(event.shiftKey);return;}
+  if(ctrl&&!event.shiftKey&&event.key.toLowerCase()==='y'){event.preventDefault();stepCaptureHistory(true);return;}
   if(ctrl&&['=','+'].includes(event.key)){event.preventDefault();setCaptureZoom((ui.captureSession?.zoom||1)*1.25);return;}
   if(ctrl&&event.key==='-'){event.preventDefault();setCaptureZoom((ui.captureSession?.zoom||1)/1.25);return;}
   if(ctrl&&event.key==='0'){event.preventDefault();if(ui.captureSession){ui.captureSession.pan={x:0,y:0};setCaptureZoom(1);}return;}
   if(event.code==='Space'&&!ctrl&&!event.altKey&&!event.shiftKey){event.preventDefault();ui.spacePan=true;return;}
   if(!ctrl&&!event.altKey&&ui.captureSession&&!isEditor(event.target)){
-   const keyMap={c:'crop',b:'pen',h:'marker',r:'rectangle',o:'ellipse',a:'arrow',d:'line',t:'text'};
+   const keyMap={c:'crop',v:'select',b:'pen',h:'marker',r:'rectangle',o:'ellipse',a:'arrow',d:'line',t:'text',n:'number',u:'blur',p:'pixelate'};
    const nextTool=keyMap[event.key.toLowerCase()];
    if(nextTool){event.preventDefault();ui.captureSession.tool=nextTool;render();return;}
   }
@@ -1115,7 +1119,7 @@ document.addEventListener('keydown',async event=>{
  if(action==='copy'){await copySelection(event.key==='Enter'&&!ctrl&&!event.altKey&&!event.shiftKey?ui.view==='library':true);return;}
  await perform(action);
 });
-function finishPointerGesture(){const redraw=!!(pointer&&ui.editor);if(pointer?.type==='annotation')annotationEngine.endTool(ui.editor?.doc,pointer.gesture);pointer=null;if(redraw)renderOverlay();}
+function finishPointerGesture(){const redraw=!!(pointer&&ui.editor),capture=!!(ui.captureSession&&pointer?.type?.startsWith('capture-')&&pointer.type!=='capture-pan');if(pointer?.type==='annotation')annotationEngine.endTool(ui.editor?.doc,pointer.gesture);if(pointer?.type==='capture-annotation')annotationEngine.endTool(ui.captureSession?.doc,pointer.gesture);pointer=null;if(redraw)renderOverlay();if(capture)render();}
 document.addEventListener('keyup',event=>{if(event.code==='Space'){ui.spacePan=false;finishPointerGesture();}});
 async function clickAction(target){const action=target.dataset.action;
  if(action==='mini-paste'){const id=target.dataset.id||target.closest?.('.mini-item')?.dataset?.id;if(id)await command('paste',{ids:[id]});return;}
@@ -1175,11 +1179,12 @@ async function clickAction(target){const action=target.dataset.action;
  if(action==='image-undo'){imageUndo();return;}if(action==='image-redo'){imageUndo(true);return;}if(action==='save-image'){if(ui.editor?.tool==='crop')await applyImageCrop();else await saveImage(true);return;}
  if(action==='reset-image-edits'){if(ui.editor)clearEditorMarkup({crop:true});return;}
  if(action==='capture-tool'){if(ui.captureSession){ui.captureSession.tool=target.dataset.tool||'crop';render();}return;}
- if(action==='capture-fullscreen'){if(ui.captureSession){captureCheckpoint();ui.captureSession.crop=null;render();}return;}
+ if(action==='capture-fullscreen'){if(ui.captureSession){annotationEngine.checkpoint(ui.captureSession.doc);ui.captureSession.doc.crop=null;render();}return;}
  if(action==='capture-zoom-in'){setCaptureZoom((ui.captureSession?.zoom||1)*1.25);return;}
  if(action==='capture-zoom-out'){setCaptureZoom((ui.captureSession?.zoom||1)/1.25);return;}
  if(action==='capture-zoom-reset'){if(ui.captureSession){ui.captureSession.pan={x:0,y:0};setCaptureZoom(1);}return;}
- if(action==='capture-undo'){captureUndo();return;}
+ if(action==='capture-undo'){stepCaptureHistory();return;}
+ if(action==='capture-redo'){stepCaptureHistory(true);return;}
  if(action==='commit-capture'){await commitCaptureSession();return;}
  if(action==='cancel-capture'){await cancelCaptureSession();return;}
  await perform(action);
@@ -1188,38 +1193,34 @@ let cardHoldTimer=null,cardHoldTarget=null,cardHoldStart=null,suppressNextCardCl
 function clearCardHold(){if(cardHoldTimer){clearTimeout(cardHoldTimer);cardHoldTimer=null;}if(cardHoldTarget){cardHoldTarget.classList.remove('pressing');cardHoldTarget=null;}cardHoldStart=null;}
 function capturePointerDown(event){
  const session=ui.captureSession;if(!session)return;
- const point=captureCanvasPoint(event);
+ const point=captureCanvasPoint(event),doc=session.doc;
  event.currentTarget?.setPointerCapture?.(event.pointerId);
  if(ui.spacePan){pointer={type:'capture-pan',x:event.clientX,y:event.clientY,pan:{...(session.pan||{x:0,y:0})}};return;}
  if(session.tool==='text'){openModal({type:'annotation',title:'Text annotation',label:'Text',value:'',multiline:true,x:point.x,y:point.y});return;}
- captureCheckpoint();
  if(session.tool==='crop'){
-  const crop=session.crop,canvas=document.getElementById('capture-canvas'),scale=(session.base?.naturalWidth||session.width)/Math.max(1,canvas?.getBoundingClientRect().width||session.width),threshold=14*scale;
+  // Crop is adapter-owned but lives in doc.crop, so this checkpoint lets undo/redo cover it.
+  annotationEngine.checkpoint(doc);
+  const crop=doc.crop,canvas=document.getElementById('capture-canvas'),scale=(session.base?.naturalWidth||session.width)/Math.max(1,canvas?.getBoundingClientRect().width||session.width),threshold=14*scale;
   const edges=crop&&crop.width>=8&&crop.height>=8?cropEdges(point,crop,threshold):null;
   if(edges){pointer={type:'capture-crop-resize',start:point,before:clone(crop),edges};}
   else if(crop&&crop.width>=8&&crop.height>=8&&within(point,crop)){pointer={type:'capture-crop-move',start:point,before:clone(crop)};}
-  else{session.crop={x:point.x,y:point.y,width:1,height:1};pointer={type:'capture-crop-new',start:point};}
+  else{doc.crop={x:point.x,y:point.y,width:1,height:1};pointer={type:'capture-crop-new',start:point};}
   drawCaptureCanvas();return;
  }
- const annotation={id:++annotationSequence,type:session.tool,x:point.x,y:point.y,width:0,height:0,widthPx:session.widthPx||7,color:session.color||'#ff5252',fill:!!session.fill};
- if(['pen','marker'].includes(session.tool))annotation.points=[point];
- session.annotations.push(annotation);
- pointer={type:'capture-draw',start:point,index:session.annotations.length-1};
+ const gesture=annotationEngine.beginTool(doc,session.tool,point,session.style,{shift:event.shiftKey});if(!gesture)return;
+ pointer={type:'capture-annotation',gesture};
  drawCaptureCanvas();
 }
 function capturePointerMove(event){
  const session=ui.captureSession;if(!session||!pointer)return;
  if(pointer.type==='capture-pan'){session.pan={x:pointer.pan.x+event.clientX-pointer.x,y:pointer.pan.y+event.clientY-pointer.y};updateCaptureTransform();return;}
- const point=captureCanvasPoint(event),dx=point.x-pointer.start.x,dy=point.y-pointer.start.y;
+ const doc=session.doc,point=captureCanvasPoint(event);
+ if(pointer.type==='capture-annotation'){annotationEngine.updateTool(doc,pointer.gesture,point,{shift:event.shiftKey});drawCaptureCanvas();return;}
+ const dx=point.x-pointer.start.x,dy=point.y-pointer.start.y;
  const width=session.base?.naturalWidth||session.width,height=session.base?.naturalHeight||session.height;
- if(pointer.type==='capture-crop-new'){session.crop={x:Math.min(point.x,pointer.start.x),y:Math.min(point.y,pointer.start.y),width:Math.max(1,Math.abs(dx)),height:Math.max(1,Math.abs(dy))};}
- else if(pointer.type==='capture-crop-move'){const b=pointer.before;session.crop={...b,x:Math.max(0,Math.min(width-b.width,b.x+dx)),y:Math.max(0,Math.min(height-b.height,b.y+dy))};}
- else if(pointer.type==='capture-crop-resize'){session.crop=resizedCrop(pointer.before,pointer.edges,dx,dy,width,height);}
- else if(pointer.type==='capture-draw'){
-  const a=session.annotations[pointer.index];if(!a)return;
-  if(a.points)a.points.push(point);
-  else{a.width=dx;a.height=dy;}
- }
+ if(pointer.type==='capture-crop-new'){doc.crop={x:Math.min(point.x,pointer.start.x),y:Math.min(point.y,pointer.start.y),width:Math.max(1,Math.abs(dx)),height:Math.max(1,Math.abs(dy))};}
+ else if(pointer.type==='capture-crop-move'){const b=pointer.before;doc.crop={...b,x:Math.max(0,Math.min(width-b.width,b.x+dx)),y:Math.max(0,Math.min(height-b.height,b.y+dy))};}
+ else if(pointer.type==='capture-crop-resize'){doc.crop=resizedCrop(pointer.before,pointer.edges,dx,dy,width,height);}
  drawCaptureCanvas();
 }
 document.addEventListener('click',async event=>{if(suppressNextCardClick){suppressNextCardClick=false;event.stopPropagation();return;}if(inspectorDrafts.size&&!await flushInspectorDrafts())return;if(event.target.classList?.contains('modal-backdrop')&&!ui.modal){void closePreview();return;}if(ui.view==='mini'&&event.target.classList?.contains('mini-backdrop')){void command('hide');return;}const miniItem=ui.view==='mini'?event.target.closest('.mini-item'):null;if(miniItem&&!event.target.closest('.mini-item-actions')&&!event.target.closest('button')){void command('paste',{ids:[miniItem.dataset.id]});return;}const target=event.target.closest('[data-action]');if(target){event.stopPropagation();void clickAction(target);return;}const card=event.target.closest('[data-item-id]');if(card){const value=item(card.dataset.itemId);const selectionOnly=event.shiftKey||event.ctrlKey||event.metaKey||ui.selecting;select(value,event.shiftKey,event.ctrlKey||event.metaKey||ui.selecting);render();if(ui.view==='shelves'&&!selectionOnly)void copySelection(true);return;}if(ui.view==='shelves'&&!event.target.closest('.search-hud,.search-summary,.shelf-head,.card,.dialog')&&!ui.preview&&!ui.modal){void perform('hide');}});
@@ -1232,8 +1233,7 @@ else if(target.id==='simple-input')ui.modal.value=target.value;
 else if(target.id==='text-editor')queueTextPreviewDraft(target.value);
 else if(target.id==='shortcut-filter'){const start=target.selectionStart;ui.shortcutsQuery=target.value;render();const field=document.getElementById('shortcut-filter');field?.focus();field?.setSelectionRange(start,start);}
 else if(target.id==='domain-filter'){ui.domain=target.value;const start=target.selectionStart;focusFirst();render();const field=document.getElementById('domain-filter');field?.focus();field?.setSelectionRange(start,start);}
-else if(['ink-color','fill-color','font-color'].includes(target.id)&&ui.editor)setMarkupStyle(target);
-else if(target.id==='capture-color'&&ui.captureSession){ui.captureSession.color=target.value;}
+else if(['ink-color','fill-color','font-color'].includes(markupControl(target)?.name))setMarkupStyle(markupControl(target),target);
 });
 document.addEventListener('change',async event=>{if(!await flushInspectorDrafts())return;const target=event.target;if(target.dataset.setting){const value=target.type==='checkbox'?target.checked:target.value;void command('setSettings',{patch:{[target.dataset.setting]:value}});}
 else if(target.dataset.visibleKind){const kinds=visibleKinds();const next=target.checked?[...new Set([...kinds,target.dataset.visibleKind])]:kinds.filter(kind=>kind!==target.dataset.visibleKind);if(next.length)void command('setSettings',{patch:{visibleKinds:KINDS.filter(kind=>next.includes(kind))}});else{target.checked=true;toast('Keep at least one shelf visible.');}}
@@ -1244,12 +1244,12 @@ else if(target.id==='type-filter'){ui.type=target.value;focusFirst();render();}
 else if(target.id==='search-mode-filter'){ui.searchMode=target.value;focusFirst();render();}
 else if(target.id==='sort-filter'){ui.sort=target.value;focusFirst();render();}
 else if(target.id==='date-filter'){ui.days=Number(target.value);focusFirst();render();}
-else if(['ink-fill','text-size','ink-width','font-family','shadow','strength'].includes(target.id)&&ui.editor)setMarkupStyle(target);
-else if(target.id==='stamp-number'&&ui.editor)annotationEngine.setNextNumber(ui.editor.doc,target.value);
+else if(['ink-fill','text-size','ink-width','font-family','shadow','strength'].includes(markupControl(target)?.name))setMarkupStyle(markupControl(target),target);
+else if(markupControl(target)?.name==='stamp-number')annotationEngine.setNextNumber(markupControl(target).surface.doc,target.value);
 });
 document.addEventListener('pointerdown',event=>{clearCardHold();if(event.target.id==='capture-canvas'){event.preventDefault();capturePointerDown(event);return;}const shelfImageCard=ui.view==='shelves'&&!ui.preview&&!ui.modal&&event.button===0&&!event.target.closest('button')?event.target.closest('.shelf .card.kind-image'):null;if(shelfImageCard){const id=shelfImageCard.dataset.itemId,value=item(id);if(value&&!recording(value)){cardHoldTarget=shelfImageCard;cardHoldStart={x:event.clientX,y:event.clientY};shelfImageCard.classList.add('pressing');cardHoldTimer=setTimeout(async()=>{clearCardHold();suppressNextCardClick=true;select(value);render();await openPreview(id);await beginImageEdit('pen');},450);}}const grip=event.target.closest('[data-list-column]');if(grip&&LIST_COLUMNS[grip.dataset.listColumn]){event.preventDefault();event.stopPropagation?.();const column=grip.dataset.listColumn;pointer={type:'list-resize',column,x:event.clientX,width:ui.listColumns[column]};grip.setPointerCapture?.(event.pointerId);return;}const divider=event.target.closest('[data-library-divider]');if(divider){event.preventDefault();const column=divider.dataset.libraryDivider;pointer={type:'library-resize',column,x:event.clientX,width:ui[column+'Width']};divider.setPointerCapture?.(event.pointerId);return;}if(event.target.id==='markup-canvas'){event.preventDefault();editorPointerDown(event);return;}if(event.target.closest('.image-stage')&&ui.zoom>1&&(!ui.editor||ui.spacePan)){event.preventDefault();pointer={type:'pan',x:event.clientX,y:event.clientY,pan:{...ui.pan}};document.querySelector('.image-stage')?.classList.add('panning');}});
 document.addEventListener('pointermove',event=>{if(cardHoldStart&&Math.hypot(event.clientX-cardHoldStart.x,event.clientY-cardHoldStart.y)>6)clearCardHold();if(pointer?.type?.startsWith('capture-')){event.preventDefault();capturePointerMove(event);return;}if(pointer){event.preventDefault();editorPointerMove(event);}});
-document.addEventListener('pointerup',()=>{clearCardHold();if(pointer?.type==='list-resize')void setLibraryLayout({listColumns:{...ui.listColumns}});if(pointer?.type==='library-resize'){const column=pointer.column;void setLibraryLayout({[column+'Width']:ui[column+'Width']});}if(pointer?.type==='capture-draw')render();finishPointerGesture();document.querySelector('.image-stage')?.classList.remove('panning');});
+document.addEventListener('pointerup',()=>{clearCardHold();if(pointer?.type==='list-resize')void setLibraryLayout({listColumns:{...ui.listColumns}});if(pointer?.type==='library-resize'){const column=pointer.column;void setLibraryLayout({[column+'Width']:ui[column+'Width']});}finishPointerGesture();document.querySelector('.image-stage')?.classList.remove('panning');});
 document.addEventListener('pointercancel',()=>{clearCardHold();if(pointer?.type==='list-resize'){resizeListColumn(pointer.column,pointer.width);render();}finishPointerGesture();});
 document.addEventListener('wheel',event=>{if(ui.view==='capture'&&ui.captureSession&&event.target.closest('.capture-stage')){event.preventDefault();if(event.shiftKey){ui.captureSession.pan.x-=event.deltaY;ui.captureSession.pan.y-=event.deltaX;updateCaptureTransform();}else{setCaptureZoom((ui.captureSession.zoom||1)*(event.deltaY<0?1.15:1/1.15));}return;}if(!ui.preview||item(ui.preview)?.kind!=='image'||recording(item(ui.preview))||!event.target.closest('.image-stage'))return;event.preventDefault();if(event.shiftKey){ui.pan.x-=event.deltaY;ui.pan.y-=event.deltaX;}else{ui.zoom=Math.min(4,Math.max(0.5,ui.zoom*(event.deltaY<0?1.13:1/1.13)));if(Math.abs(ui.zoom-1)<0.03){ui.zoom=1;ui.pan={x:0,y:0};}}updateTransform();},{passive:false});
 const libraryDragType='application/x-clipboardline-ids';let libraryDragIDs=null,folderDropTarget=null,libraryRenderDeferred=false;

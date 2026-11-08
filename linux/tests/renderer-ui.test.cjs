@@ -54,14 +54,14 @@ function fixture({deferInitialState=false,initialVisible=true,queuedAnimationFra
   return output;
  }};
  const context={window:{clipboardLine:api,addEventListener(name,listener){if(!listeners.has('window:'+name))listeners.set('window:'+name,[]);listeners.get('window:'+name).push(listener);}},document,HTMLElement:Element,HTMLTextAreaElement:TextArea,Image:FixtureImage,console,structuredClone,URL,Set,Date,JSON,Math,Number,String,requestAnimationFrame:fn=>queuedAnimationFrames?animationFrames.push(fn):fn(),setTimeout:fn=>{queueMicrotask(fn);return 1;},clearTimeout(){}};
- vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../locales.js'),'utf8'),context,{filename:'locales.js'});vm.runInContext(fs.readFileSync(path.join(__dirname,'../lib/annotations.cjs'),'utf8'),context,{filename:'lib/annotations.cjs'});vm.runInContext(fs.readFileSync(path.join(__dirname,'../renderer.js'),'utf8'),context,{filename:'renderer.js'});
+ vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../locales.js'),'utf8'),context,{filename:'locales.js'});vm.runInContext(fs.readFileSync(path.join(__dirname,'../lib/annotations.cjs'),'utf8'),context,{filename:'lib/annotations.cjs'});const engine=context.window.clipboardLineAnnotations,engineDraw=engine.drawAnnotations,drawn=[];engine.drawAnnotations=(ctx,annotations,options)=>{drawn.push({annotations:structuredClone(annotations),clip:options?.clip?structuredClone(options.clip):null,base:options?.base??null});return engineDraw(ctx,annotations,options);};vm.runInContext(fs.readFileSync(path.join(__dirname,'../renderer.js'),'utf8'),context,{filename:'renderer.js'});
  async function ready(){await new Promise(setImmediate);}
  async function key(code,{ctrl=false,alt=false,shift=false,key,target,composing=false,keyCode=0}={}){const event={code,key:key||(/^Key/.test(code)?code.slice(3).toLowerCase():code==='Space'?' ':code),ctrlKey:ctrl,metaKey:false,altKey:alt,shiftKey:shift,repeat:false,isComposing:composing,keyCode,target:target||new Element(),preventDefault(){this.prevented=true;}};for(const listener of listeners.get('keydown')||[])await listener(event);await ready();return event;}
  async function click(action,extra={}){const target=new Element();target.dataset.action=action;Object.assign(target.dataset,extra);target.closest=selector=>selector==='[data-action]'?target:null;for(const listener of listeners.get('click')||[])listener({target,stopPropagation(){}});await ready();}
- async function pointer(type,x,y){const target=document.getElementById('markup-canvas');for(const listener of listeners.get(type)||[])listener({target,clientX:x,clientY:y,pointerId:1,shiftKey:false,preventDefault(){}});await ready();}
+ async function pointer(type,x,y,{shift=false,canvas='markup-canvas'}={}){const target=document.getElementById(canvas);for(const listener of listeners.get(type)||[])listener({target,clientX:x,clientY:y,pointerId:1,shiftKey:shift,preventDefault(){}});await ready();}
  async function input(id,value){const target=document.getElementById(id);target.value=value;target.selectionStart=value.length;for(const listener of listeners.get('input')||[])await listener({target});await ready();}
  async function change(id,value){const target=document.getElementById(id);target.value=value;for(const listener of listeners.get('change')||[])await listener({target});await ready();}
- return{async cardClick(id,{ctrl=false}={}){const card=new Element();card.dataset.itemId=id;card.closest=selector=>selector==='[data-item-id]'?card:null;for(const listener of listeners.get('click')||[])await listener({target:card,ctrlKey:ctrl,metaKey:false,shiftKey:false,stopPropagation(){}});await ready();},grid(columns){document.querySelectorAll=selector=>selector==='.library-grid > .card'?[...document.getElementById('app').innerHTML.matchAll(/<article class="[^"]*"[^>]*data-item-id="([^"]+)"/g)].map((match,index)=>({offsetTop:Math.floor(index/columns)*200,dataset:{itemId:match[1]}})):[];},editor(id){const node=document.getElementById(id);node.tagName='INPUT';node.matches=selector=>selector.includes('input');return node;},ready,key,input,change,click,pointer,async blur(){for(const listener of listeners.get('window:blur')||[])listener();await ready();},imageLoads,paintCalls,markupCalls,animationFrames,flushAnimationFrames(){for(const fn of animationFrames.splice(0))fn();},releaseInitialState(){releaseInitialState?.();},deferReply(action){let release;const promise=new Promise(resolve=>{release=resolve;});delayedReply={action,promise};return release;},deferImageBroadcast({surface=true}={}){deferredImageBroadcast={surface};},releaseImageBroadcast(){const next=pendingImageBroadcast;pendingImageBroadcast=null;if(next)subscriber?.(next);},failExportOnce(){exportFailures++;},failCleanupOnce(){cleanupFailures++;},failEditOnce(){editFailures++;},state,commands,nodes,image,text1,text2,link,api,get main(){return nodes.get('app').innerHTML;},get overlay(){return nodes.get('overlay-root').innerHTML;}};
+ return{drawn,async cardClick(id,{ctrl=false}={}){const card=new Element();card.dataset.itemId=id;card.closest=selector=>selector==='[data-item-id]'?card:null;for(const listener of listeners.get('click')||[])await listener({target:card,ctrlKey:ctrl,metaKey:false,shiftKey:false,stopPropagation(){}});await ready();},grid(columns){document.querySelectorAll=selector=>selector==='.library-grid > .card'?[...document.getElementById('app').innerHTML.matchAll(/<article class="[^"]*"[^>]*data-item-id="([^"]+)"/g)].map((match,index)=>({offsetTop:Math.floor(index/columns)*200,dataset:{itemId:match[1]}})):[];},editor(id){const node=document.getElementById(id);node.tagName='INPUT';node.matches=selector=>selector.includes('input');return node;},ready,key,input,change,click,pointer,async blur(){for(const listener of listeners.get('window:blur')||[])listener();await ready();},imageLoads,paintCalls,markupCalls,animationFrames,flushAnimationFrames(){for(const fn of animationFrames.splice(0))fn();},releaseInitialState(){releaseInitialState?.();},deferReply(action){let release;const promise=new Promise(resolve=>{release=resolve;});delayedReply={action,promise};return release;},deferImageBroadcast({surface=true}={}){deferredImageBroadcast={surface};},releaseImageBroadcast(){const next=pendingImageBroadcast;pendingImageBroadcast=null;if(next)subscriber?.(next);},failExportOnce(){exportFailures++;},failCleanupOnce(){cleanupFailures++;},failEditOnce(){editFailures++;},state,commands,nodes,image,text1,text2,link,api,get main(){return nodes.get('app').innerHTML;},get overlay(){return nodes.get('overlay-root').innerHTML;}};
 }
 
 function selectedCards(f){return [...f.main.matchAll(/<article class="([^"]*)"[^>]*data-item-id="([^"]+)"/g)].filter(match=>match[1].split(' ').includes('selected')).map(match=>match[2]);}
@@ -788,4 +788,83 @@ test('editor fill color input edits selected',async()=>{
  await f.click('image-tool',{tool:'select'});await f.pointer('pointerdown',150,50);await f.pointer('pointerup',150,50);
  await f.input('fill-color','#00ff00');const [edited]=await savedMarkup(f);
  assert.equal(edited.fillColor,'#00ff00');assert.deepEqual([edited.id,edited.type,edited.x,edited.y,edited.width,edited.height],[drawn.id,drawn.type,drawn.x,drawn.y,drawn.width,drawn.height]);
+});
+
+async function capturePointer(f,type,x,y,options={}){await f.pointer(type,x,y,{canvas:'capture-canvas',...options});}
+async function captureDrag(f,[x0,y0],[x1,y1],options={}){await capturePointer(f,'pointerdown',x0,y0,options);await capturePointer(f,'pointermove',x1,y1,options);await capturePointer(f,'pointerup',x1,y1,options);}
+// The renderer is an IIFE, so tests read the capture document from what it last painted:
+// annotations, plus the blur clip (the crop when one exists, else the full 900x220 image).
+const captureDoc=f=>{const last=f.drawn.at(-1);assert.ok(last,'capture painted');const full=last.clip&&last.clip.x===0&&last.clip.y===0&&last.clip.width===900&&last.clip.height===220;return{annotations:last.annotations,crop:full?null:last.clip,base:last.base};};
+const captureToolPressed=tool=>new RegExp(`data-action="capture-tool"[^>]*data-tool="${tool}" aria-pressed="true"`);
+async function captureText(f,x,y,text){await f.key('KeyT');await capturePointer(f,'pointerdown',x,y);await capturePointer(f,'pointerup',x,y);await f.input('simple-input',text);await f.click('confirm-modal');}
+
+test('capture key v selects, n number, u blur, p pixelate',async()=>{
+ const f=captureFixture();await f.ready();
+ for(const [code,tool]of [['KeyV','select'],['KeyN','number'],['KeyU','blur'],['KeyP','pixelate']]){await f.key(code);assert.match(f.main,captureToolPressed(tool),code+' picks '+tool);}
+ for(const id of ['capture-color','capture-width','capture-fill','capture-fill-color','capture-font-family','capture-font-color','capture-text-size','capture-shadow','capture-strength','capture-stamp-number','capture-redo'])assert.match(f.main,new RegExp('id="'+id+'"|data-action="'+id+'"'),id+' is rendered');
+ for(const id of ['ink-color','fill-color','font-color','strength','stamp-number'])assert.doesNotMatch(f.main,new RegExp('id="'+id+'"'),'capture never reuses editor id '+id);
+ await f.key('KeyN');await capturePointer(f,'pointerdown',100,100);await capturePointer(f,'pointerup',100,100);await capturePointer(f,'pointerdown',300,100);await capturePointer(f,'pointerup',300,100);
+ assert.deepEqual(captureDoc(f).annotations.map(value=>[value.type,value.value]),[['number',1],['number',2]]);
+ await f.key('KeyU');f.paintCalls.length=0;await captureDrag(f,[100,50],[300,150]);
+ assert.ok(f.paintCalls.some(value=>value.canvas===''&&value.operation==='drawImage'&&value.source==='original'),'blur samples the decoded screenshot');
+ await f.key('KeyP');await captureDrag(f,[400,50],[500,150]);
+ assert.deepEqual(captureDoc(f).annotations.slice(2).map(value=>[value.type,value.x,value.y,value.width,value.height]),[['blur',100,50,200,100],['pixelate',400,50,100,100]]);
+ f.paintCalls.length=0;await f.key('Enter');
+ assert.equal(f.commands.filter(value=>value.action==='commitCapture').length,1);
+ assert.ok(f.paintCalls.some(value=>value.canvas===''&&value.operation==='drawImage'&&value.source==='original'),'the committed PNG blurs from the same screenshot');
+});
+
+test('capture redo Ctrl+Shift+Z and Ctrl+Y',async()=>{
+ const f=captureFixture();await f.ready();
+ await captureDrag(f,[10,10],[200,150]);const crop=captureDoc(f).crop;assert.ok(crop&&crop.width>100,'crop drawn');
+ await f.key('KeyR');await captureDrag(f,[50,50],[120,100]);assert.equal(captureDoc(f).annotations.length,1);
+ await f.key('KeyZ',{ctrl:true});assert.equal(captureDoc(f).annotations.length,0);assert.deepEqual(captureDoc(f).crop,crop);
+ await f.key('KeyZ',{ctrl:true,shift:true});assert.equal(captureDoc(f).annotations.length,1);
+ await f.key('KeyZ',{ctrl:true});await f.key('KeyZ',{ctrl:true});assert.equal(captureDoc(f).crop,null,'undo covers crop changes');
+ await f.key('KeyY',{ctrl:true});assert.deepEqual(captureDoc(f).crop,crop);
+ await f.key('KeyY',{ctrl:true});assert.equal(captureDoc(f).annotations[0].type,'rectangle');
+ await f.click('capture-undo');assert.equal(captureDoc(f).annotations.length,0);await f.click('capture-redo');assert.equal(captureDoc(f).annotations.length,1);
+});
+
+test('capture shift snaps arrow',async()=>{
+ const f=captureFixture();await f.ready();await f.key('KeyA');
+ await captureDrag(f,[100,100],[200,110],{shift:true});
+ const [arrow]=captureDoc(f).annotations;assert.equal(arrow.type,'arrow');assert.ok(Math.abs(arrow.height)<1e-9,'snapped to horizontal');assert.ok(Math.abs(arrow.width-Math.hypot(100,10))<1e-9);
+});
+
+test('capture select tool moves annotation',async()=>{
+ const f=captureFixture();await f.ready();await f.key('KeyR');await captureDrag(f,[100,50],[200,120]);
+ const before=captureDoc(f).annotations[0];
+ await f.key('KeyV');await captureDrag(f,[150,50],[170,60]);
+ const after=captureDoc(f).annotations[0];
+ assert.deepEqual([after.id,after.type,after.width,after.height],[before.id,before.type,before.width,before.height]);assert.ok(Math.abs(after.x-(before.x+20))<1e-9&&Math.abs(after.y-(before.y+10))<1e-9,'moved by the pointer delta (canvas mapping may add float noise)');
+ await f.key('KeyZ',{ctrl:true});assert.deepEqual(captureDoc(f).annotations[0],before);
+});
+
+test('capture tool keys ignored in editor field',async()=>{
+ const f=captureFixture();await f.ready();assert.match(f.main,captureToolPressed('crop'));
+ for(const code of ['KeyV','KeyN','KeyU','KeyP','KeyR']){const event=await f.key(code,{target:f.editor('capture-stamp-number')});assert.ok(!event.prevented);assert.match(f.main,captureToolPressed('crop'),code+' typed in a field keeps the tool');}
+ await f.key('KeyV');assert.match(f.main,captureToolPressed('select'));
+});
+
+test('capture style edits apply to the selection only with the select tool',async()=>{
+ const f=captureFixture();await f.ready();await captureText(f,100,100,'Hi');
+ let [text]=captureDoc(f).annotations;assert.equal(text.type,'text');assert.equal(text.fontColor,'#ff5252');
+ await f.input('capture-font-color','#00ff00');assert.equal(captureDoc(f).annotations[0].fontColor,'#ff5252','text tool style edits do not rewrite the new text');
+ await f.key('KeyV');await capturePointer(f,'pointerdown',110,90);await capturePointer(f,'pointerup',110,90);
+ await f.input('capture-font-color','#0000ff');assert.equal(captureDoc(f).annotations[0].fontColor,'#0000ff');
+ await f.key('KeyR');await captureDrag(f,[300,50],[400,120]);assert.equal(captureDoc(f).annotations[1].fontColor,undefined);assert.equal(captureDoc(f).annotations[1].color,'#ff5252');
+});
+
+test('editor style edits apply to the selection only with the select tool',async()=>{
+ const f=fixture();await openMarkup(f);await f.click('image-tool',{tool:'text'});
+ await f.pointer('pointerdown',100,100);await f.pointer('pointerup',100,100);await f.input('simple-input','Hi');await f.click('confirm-modal');
+ await f.input('font-color','#00ff00');assert.equal((await savedMarkup(f))[0].fontColor,'#ff5252','text tool style edits do not rewrite the new text');
+ await f.click('image-tool',{tool:'select'});await f.pointer('pointerdown',110,90);await f.pointer('pointerup',110,90);
+ await f.input('font-color','#0000ff');assert.equal((await savedMarkup(f))[0].fontColor,'#0000ff');
+});
+
+test('capture and editor markup labels are translated to Turkish',async()=>{
+ const f=captureFixture();await f.ready();f.api.emit({settings:{...f.state.settings,language:'tr'}});await f.ready();
+ for(const label of ['Numara damgası','Bulanıklaştır','Pikselleştir','Dolgu rengi','Yazı tipi','Metin rengi','Gölge','Efekt gücü','Sonraki numara','Yinele'])assert.ok(f.main.includes(label),label);
 });

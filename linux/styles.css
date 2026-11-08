@@ -764,6 +764,12 @@ body.view-capture, body.view-capture #app, .capture-shell {
   min-width: 32px;
   padding: 5px;
 }
+.capture-toolbar > * { flex-shrink: 0; }
+.capture-toolbar select { width: auto; max-width: 96px; height: 28px; padding: 2px 4px; font-size: 11px; }
+.capture-toolbar .check-label { font-size: 11px; }
+.capture-toolbar input[type="range"] { width: 80px; }
+.capture-toolbar input[type="number"] { width: 54px; height: 28px; padding: 2px 4px; }
+.capture-toolbar :disabled { opacity: .45; }
 
 /* ==========================================================================
    Mini Pano (Alt+Meta+V) — Compact Summary Clipboard History Popup
