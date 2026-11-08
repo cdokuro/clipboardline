@@ -71,6 +71,66 @@
  function deleteSelected(doc){if(doc.selected==null||!doc.annotations[doc.selected])return false;checkpoint(doc);doc.annotations.splice(doc.selected,1);doc.selected=null;return true;}
  function applyStyle(doc,patch){if(doc.selected==null||!doc.annotations[doc.selected])return false;checkpoint(doc);Object.assign(doc.annotations[doc.selected],patch);return true;}
  function setNextNumber(doc,n){doc.nextNumber=Math.max(1,Math.floor(Number(n))||1);}
- const exports={TOOLS,DEFAULT_STYLE,createDocument,checkpoint,undo,redo,annotationBounds,hitTest,beginTool,updateTool,endTool,addText,deleteSelected,applyStyle,setNextNumber};
+ // Drawing. Legacy branches reproduce the original renderer call sequence exactly
+ // (see tests/fixtures/annotations-golden.json); new style fields are optional.
+ // Strength (1..100) mapping: blur radius = round(strength/5) px (min 1);
+ // pixelate cell = round(strength/4) px (min 2). Number stamp: radius is
+ // 0.6*fontSize (fontSize, else widthPx*4, else 40); digit uses a contrasting
+ // black/white chosen from the fill's luminance, ignoring fontColor.
+ const blurRadius=strength=>Math.max(1,Math.round((Number(strength)||DEFAULT_STYLE.strength)/5));
+ const pixelCell=strength=>Math.max(2,Math.round((Number(strength)||DEFAULT_STYLE.strength)/4));
+ function contrastColor(color){
+  const m=/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(color));if(!m)return'#ffffff';
+  let h=m[1];if(h.length===3)h=h.split('').map(c=>c+c).join('');
+  const [r,g,b]=[0,2,4].map(i=>parseInt(h.slice(i,i+2),16));
+  return(0.299*r+0.587*g+0.114*b)>150?'#000000':'#ffffff';
+ }
+ function regionOf(annotation,clip){
+  const b=annotationBounds(annotation);let x0=b.x,y0=b.y,x1=b.x+b.width,y1=b.y+b.height;
+  if(clip){x0=Math.max(x0,clip.x);y0=Math.max(y0,clip.y);x1=Math.min(x1,clip.x+clip.width);y1=Math.min(y1,clip.y+clip.height);}
+  return x1>x0&&y1>y0?{x:x0,y:y0,width:x1-x0,height:y1-y0}:null;
+ }
+ function drawBlur(ctx,annotation,base,clip){
+  const r=regionOf(annotation,clip);if(!base||!r)return;
+  ctx.beginPath();ctx.rect(r.x,r.y,r.width,r.height);ctx.clip();
+  ctx.filter=`blur(${blurRadius(annotation.strength)}px)`;
+  ctx.drawImage(base,r.x,r.y,r.width,r.height,r.x,r.y,r.width,r.height);
+ }
+ function drawPixelate(ctx,annotation,base,clip,createCanvas){
+  const r=regionOf(annotation,clip);if(!base||!r)return;
+  const make=createCanvas||(typeof document==='object'?()=>document.createElement('canvas'):null);if(!make)return;
+  const cell=pixelCell(annotation.strength),cols=Math.ceil(r.width/cell),rows=Math.ceil(r.height/cell);
+  const scratch=make();scratch.width=cols;scratch.height=rows;
+  const sctx=scratch.getContext('2d');if(!sctx)return;
+  sctx.drawImage(base,r.x,r.y,r.width,r.height,0,0,cols,rows);
+  ctx.beginPath();ctx.rect(r.x,r.y,r.width,r.height);ctx.clip();
+  ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(scratch,0,0,cols,rows,r.x,r.y,cols*cell,rows*cell);
+ }
+ function drawAnnotations(context,annotations,{base=null,clip=null,createCanvas=null}={}){
+  for(const annotation of annotations){
+   context.save();
+   context.strokeStyle=annotation.color||'#ff5252';
+   context.fillStyle=annotation.type==='text'?(annotation.fontColor||annotation.color||'#ff5252'):(annotation.fillColor||annotation.color||'#ff5252');
+   context.lineWidth=annotation.widthPx||annotation.strokeWidth||7;context.lineCap='round';context.lineJoin='round';
+   if(annotation.shadow){context.shadowColor='rgba(0,0,0,.55)';context.shadowBlur=Math.max(6,context.lineWidth*1.5);context.shadowOffsetX=2;context.shadowOffsetY=3;}
+   if(annotation.type==='pen'||annotation.type==='marker'){context.lineWidth=annotation.widthPx||7;if(annotation.type==='marker'){context.globalAlpha=.32;context.lineWidth*=3;}context.beginPath();(annotation.points||[]).forEach((point,index)=>index?context.lineTo(point.x,point.y):context.moveTo(point.x,point.y));context.stroke();}
+   else if(annotation.type==='rectangle'){context.strokeRect(annotation.x,annotation.y,annotation.width,annotation.height);if(annotation.fill){context.globalAlpha=.18;context.fillRect(annotation.x,annotation.y,annotation.width,annotation.height);}}
+   else if(annotation.type==='ellipse'){const b=annotationBounds(annotation);context.beginPath();context.ellipse(b.x+b.width/2,b.y+b.height/2,Math.max(1,b.width/2),Math.max(1,b.height/2),0,0,Math.PI*2);context.stroke();if(annotation.fill){context.globalAlpha=.18;context.fill();}}
+   else if(annotation.type==='line'||annotation.type==='arrow'){const end={x:annotation.x+annotation.width,y:annotation.y+annotation.height};context.beginPath();context.moveTo(annotation.x,annotation.y);context.lineTo(end.x,end.y);context.stroke();if(annotation.type==='arrow'){const angle=Math.atan2(annotation.height,annotation.width),head=Math.max(18,context.lineWidth*4);context.beginPath();context.moveTo(end.x-head*Math.cos(angle-.5),end.y-head*Math.sin(angle-.5));context.lineTo(end.x,end.y);context.lineTo(end.x-head*Math.cos(angle+.5),end.y-head*Math.sin(angle+.5));context.stroke();}}
+   else if(annotation.type==='text'){context.font=`${annotation.fontSize||40}px ${annotation.fontFamily||'Segoe UI, sans-serif'}`;String(annotation.text).split('\n').forEach((line,index)=>context.fillText(line,annotation.x,annotation.y+index*(annotation.fontSize||40)*1.25));}
+   else if(annotation.type==='number'){
+    const size=annotation.fontSize||(annotation.widthPx?annotation.widthPx*4:40),fill=annotation.fillColor||annotation.color||'#ff5252';
+    context.beginPath();context.arc(annotation.x,annotation.y,size*.6,0,Math.PI*2);context.fill();
+    context.shadowColor='transparent';context.fillStyle=contrastColor(fill);
+    context.font=`bold ${size}px ${annotation.fontFamily||'sans-serif'}`;context.textAlign='center';context.textBaseline='middle';
+    context.fillText(String(annotation.value),annotation.x,annotation.y);
+   }
+   else if(annotation.type==='blur')drawBlur(context,annotation,base,clip);
+   else if(annotation.type==='pixelate')drawPixelate(context,annotation,base,clip,createCanvas);
+   context.restore();
+  }
+ }
+ const exports={TOOLS,drawAnnotations,DEFAULT_STYLE,createDocument,checkpoint,undo,redo,annotationBounds,hitTest,beginTool,updateTool,endTool,addText,deleteSelected,applyStyle,setNextNumber};
  if(typeof module==='object'&&module.exports)module.exports=exports;else scope.clipboardLineAnnotations=exports;
 })(typeof window==='object'?window:globalThis);
