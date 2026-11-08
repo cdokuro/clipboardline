@@ -19,10 +19,14 @@ class ImageSearch{
  receive(message){
   if(!message||typeof message!=='object')return;
   if(message.event==='failed'){this.failure();return;}
-  if(message.event==='ready'){this.state.available=message.available===true;if(!this.state.available){this.queue=[];this.active=null;this.updateStatus();}if(!this.state.available)this.state.error='Offline image search is unavailable. Reinstall the official application to restore its bundled models.';this.resolveReady(this.state.available);this.changed({...this.state});return;}
+  if(message.event==='ready'){this.state.available=message.available===true;if(!this.state.available){this.queue=[];this.active=null;this.updateStatus();}if(!this.state.available){this.state.error='Offline image search is unavailable. Reinstall the official application to restore its bundled models.';this.retire();}this.resolveReady(this.state.available);this.changed({...this.state});return;}
   const pending=this.requests.get(message.id);if(!pending)return;this.requests.delete(message.id);clearTimeout(pending.timer);if(message.error)pending.reject(new Error(String(message.error).slice(0,300)));else pending.resolve(message.result);
  }
- failure(){if(this.closed||this.broken)return;this.broken=true;this.state.available=false;this.state.indexing=false;this.state.pending=0;this.queue=[];this.active=null;this.state.error='Offline image search stopped. Reopen ClipBoardLine to try again.';this.resolveReady(false);for(const pending of this.requests.values()){clearTimeout(pending.timer);pending.reject(new Error(this.state.error));}this.requests.clear();this.changed({...this.state});void this.worker.terminate();}
+ // Without its bundled models the worker can never serve a request, yet its
+ // isolate stays resident (~5-8 MB) for the life of the tray app. Release it;
+ // request() and search() already fail closed on an unavailable state.
+ retire(){if(this.retired)return;this.retired=true;void this.worker.terminate();}
+ failure(){if(this.closed||this.broken||this.retired)return;this.broken=true;this.state.available=false;this.state.indexing=false;this.state.pending=0;this.queue=[];this.active=null;this.state.error='Offline image search stopped. Reopen ClipBoardLine to try again.';this.resolveReady(false);for(const pending of this.requests.values()){clearTimeout(pending.timer);pending.reject(new Error(this.state.error));}this.requests.clear();this.changed({...this.state});void this.worker.terminate();}
  request(action,payload,transfer=[]){if(this.closed||!this.state.available)return Promise.reject(new Error('Offline image search is unavailable.'));const id=++this.sequence;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{this.requests.delete(id);reject(new Error('Offline image search timed out.'));this.failure();void this.worker.terminate();},120000);timer.unref?.();this.requests.set(id,{resolve,reject,timer});try{this.worker.postMessage({id,action,payload},transfer);}catch(error){this.requests.delete(id);clearTimeout(timer);reject(error);}});}
  key(value){const key=value?.kind==='image'&&!value.trashedAt?(value.renderedFile||value.imageFile):null;return typeof key==='string'&&/^[a-f0-9]{64}\.png$/.test(key)?key.slice(0,64):null;}
  current(id,key){return this.items().some(value=>value.id===id&&this.key(value)===key);}

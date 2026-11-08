@@ -41,6 +41,10 @@ if(development){const directory=path.join(app.getPath('appData'),'ClipBoardLine 
 if(process.platform==='linux'&&!testMode&&process.env.WAYLAND_DISPLAY){
   app.commandLine.appendSwitch('ozone-platform','wayland');
 }
+// The tray app stays resident. On Linux Chromium's network service already runs
+// unsandboxed (--service-sandbox-type=none), so a separate utility process only
+// adds ~12 MB of private memory and buys no isolation. Host it in-process.
+if(process.platform==='linux')app.commandLine.appendSwitch('enable-features','NetworkServiceInProcess2');
 app.setName(development?'ClipBoardLine Dev':'ClipBoardLine');
 protocol.registerSchemesAsPrivileged([{scheme:'appmedia',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true,stream:true}}]);
 let window,store,tray,trayPresentation,updates,updateScheduler,monitor,clipboardTimer,retentionTimer,updateTimer,updateLaunchTimer,previous=null,view='shelves',message='',viewEvent=null;

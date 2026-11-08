@@ -66,3 +66,14 @@ test('missing bundled models fail closed in a real worker without creating an ex
  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'clipboardline-no-model-'));const search=new ImageSearch({modelDirectory:directory,cacheDirectory:path.join(directory,'cache'),items:()=>[],readImage:()=>null});
  try{assert.equal(await search.ready,false);assert.deepEqual(await search.search('query',[]),{ids:[],scores:[],available:false,indexing:false});}finally{await search.stop();fs.rmSync(directory,{recursive:true,force:true});}
 });
+
+test('an unavailable model worker is terminated instead of idling resident, without reporting a failure',async()=>{
+ const worker=new EventEmitter();worker.postMessage=()=>{throw new Error('No request may reach a retired worker.');};worker.unref=()=>{};worker.terminate=async()=>{worker.terminated=true;queueMicrotask(()=>worker.emit('exit',1));};
+ queueMicrotask(()=>worker.emit('message',{event:'ready',available:false}));
+ const changes=[],search=new ImageSearch({modelDirectory:'unused',cacheDirectory:'unused',items:()=>[{id,kind:'image',imageFile:key+'.png'}],readImage:()=>null,changed:value=>changes.push(value),workerFactory:()=>worker});
+ assert.equal(await search.ready,false);await tick();await tick();
+ assert.equal(worker.terminated,true);
+ assert.match(search.state.error,/Reinstall/);assert.doesNotMatch(search.state.error,/stopped/);
+ search.refresh();assert.deepEqual(await search.search('query',[id]),{ids:[],scores:[],available:false,indexing:false});
+ await search.stop();
+});
