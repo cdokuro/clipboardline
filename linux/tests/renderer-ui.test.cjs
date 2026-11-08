@@ -868,3 +868,23 @@ test('capture and editor markup labels are translated to Turkish',async()=>{
  const f=captureFixture();await f.ready();f.api.emit({settings:{...f.state.settings,language:'tr'}});await f.ready();
  for(const label of ['Numara damgası','Bulanıklaştır','Pikselleştir','Dolgu rengi','Yazı tipi','Metin rengi','Gölge','Efekt gücü','Sonraki numara','Yinele'])assert.ok(f.main.includes(label),label);
 });
+
+test('capture Delete removes selected annotation',async()=>{
+ const f=captureFixture();await f.ready();await f.key('KeyR');await captureDrag(f,[100,50],[200,120]);await captureDrag(f,[300,50],[400,120]);
+ let event=await f.key('Delete');assert.ok(!event.prevented,'nothing selected: Delete does nothing');assert.equal(captureDoc(f).annotations.length,2);
+ await f.key('KeyV');await capturePointer(f,'pointerdown',150,50);await capturePointer(f,'pointerup',150,50);
+ event=await f.key('Delete');assert.ok(event.prevented);assert.deepEqual(captureDoc(f).annotations.map(value=>value.x),[300]);
+ event=await f.key('Backspace');assert.ok(!event.prevented,'selection cleared after delete');assert.equal(captureDoc(f).annotations.length,1);
+ await capturePointer(f,'pointerdown',350,50);await capturePointer(f,'pointerup',350,50);await f.key('Backspace');assert.equal(captureDoc(f).annotations.length,0);
+ await f.key('KeyZ',{ctrl:true});await f.key('KeyZ',{ctrl:true});assert.equal(captureDoc(f).annotations.length,1,'undo restores the last delete');
+ // A select click that hits an annotation is itself a history step (engine), so two more undos restore the first delete.
+ await f.key('KeyZ',{ctrl:true});await f.key('KeyZ',{ctrl:true});assert.equal(captureDoc(f).annotations.length,2,'deletes are undoable');
+ assert.equal(f.commands.filter(value=>['commitCapture','cancelCapture'].includes(value.action)).length,0);
+});
+
+test('capture Delete inside an editor field does nothing',async()=>{
+ const f=captureFixture();await f.ready();await f.key('KeyR');await captureDrag(f,[100,50],[200,120]);
+ await f.key('KeyV');await capturePointer(f,'pointerdown',150,50);await capturePointer(f,'pointerup',150,50);
+ for(const code of ['Delete','Backspace']){const event=await f.key(code,{target:f.editor('capture-stamp-number')});assert.ok(!event.prevented,code+' stays native in a field');assert.equal(captureDoc(f).annotations.length,1);}
+ await f.key('Delete');assert.equal(captureDoc(f).annotations.length,0);
+});

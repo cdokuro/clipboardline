@@ -1073,6 +1073,8 @@ document.addEventListener('keydown',async event=>{
   if(ctrl&&event.key==='-'){event.preventDefault();setCaptureZoom((ui.captureSession?.zoom||1)/1.25);return;}
   if(ctrl&&event.key==='0'){event.preventDefault();if(ui.captureSession){ui.captureSession.pan={x:0,y:0};setCaptureZoom(1);}return;}
   if(event.code==='Space'&&!ctrl&&!event.altKey&&!event.shiftKey){event.preventDefault();ui.spacePan=true;return;}
+  // Delete/Backspace remove the selected annotation (undoable); with nothing selected they do nothing.
+  if(['Backspace','Delete'].includes(event.key)&&!ctrl&&!event.altKey&&!event.shiftKey&&!isEditor(event.target)&&ui.captureSession?.doc.selected!=null){event.preventDefault();if(annotationEngine.deleteSelected(ui.captureSession.doc))render();return;}
   if(!ctrl&&!event.altKey&&ui.captureSession&&!isEditor(event.target)){
    const keyMap={c:'crop',v:'select',b:'pen',h:'marker',r:'rectangle',o:'ellipse',a:'arrow',d:'line',t:'text',n:'number',u:'blur',p:'pixelate'};
    const nextTool=keyMap[event.key.toLowerCase()];
