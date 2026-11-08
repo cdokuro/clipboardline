@@ -736,10 +736,22 @@ async function savedMarkup(f){const before=f.commands.filter(value=>value.action
 async function drag(f,[x0,y0],[x1,y1]){await f.pointer('pointerdown',x0,y0);await f.pointer('pointermove',x1,y1);await f.pointer('pointerup',x1,y1);}
 
 test('editor opens legacy document unchanged',async()=>{
- const f=fixture();await f.ready();f.api.emit({items:f.state.items.map(value=>value.id===f.image?{...value,annotations:structuredClone(golden.annotations),crop:null}:value)});await openMarkup(f);
+ const legacy=structuredClone(golden.annotations),crop={x:5,y:6,width:300,height:150};
+ const f=fixture();await f.ready();f.api.emit({items:f.state.items.map(value=>value.id===f.image?{...value,annotations:structuredClone(legacy),crop:structuredClone(crop)}:value)});await openMarkup(f);
  const calls=f.markupCalls,start=calls.map(call=>call[0]==='call'&&call[1]==='clearRect').lastIndexOf(true);
  assert.ok(start>=0,'markup overlay painted');assert.deepEqual(calls.slice(start+1),golden.calls);
  await f.key('KeyS',{ctrl:true});assert.equal(f.commands.filter(value=>value.action==='saveImage').length,0,'opening a legacy document must not dirty it');
+ await f.click('image-tool',{tool:'crop'});await f.key('Enter');assert.equal(f.commands.filter(value=>value.action==='saveImage').length,0,'applying an unchanged crop must not save');assert.match(f.overlay,/data-tool="select" aria-pressed="true"/);
+ // (a) a net no-op edit saves the legacy document exactly as it was stored.
+ await f.click('image-tool',{tool:'rectangle'});await drag(f,[400,100],[500,180]);await f.key('KeyZ',{ctrl:true});
+ let saved=await savedMarkup(f),payload=f.commands.filter(value=>value.action==='saveImage').at(-1).payload;
+ assert.deepEqual(payload.crop,crop);assert.deepEqual(saved,legacy);
+ // (b) moving one old-type annotation changes only its position.
+ await f.click('image-tool',{tool:'select'});await drag(f,[110,20],[130,30]);
+ saved=await savedMarkup(f);payload=f.commands.filter(value=>value.action==='saveImage').at(-1).payload;
+ assert.deepEqual(payload.crop,crop);assert.equal(saved.length,legacy.length);
+ const {x,y,...rest}=saved[2],{x:x0,y:y0,...restBefore}=legacy[2];assert.deepEqual(rest,restBefore);assert.ok(Math.abs(x-(x0+20))<1e-9&&Math.abs(y-(y0+10))<1e-9,'moved by the pointer delta (canvas mapping may add float noise)');
+ saved.forEach((value,index)=>{if(index!==2)assert.deepEqual(value,legacy[index]);});
 });
 
 test('editor redo with Ctrl+Shift+Z and Ctrl+Y',async()=>{
