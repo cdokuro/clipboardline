@@ -567,8 +567,36 @@ function drawCaptureCanvas(){
   c.restore();
  }
  drawSelectionOutline(c,session.doc,width);
+ drawCaptureMagnifier(c,session,width,height);
  const badge=document.getElementById('capture-size-badge');
  if(badge)badge.textContent=captureCrop(session)?`${Math.round(crop.width)} × ${Math.round(crop.height)} px`:`${t('Full screen')} · ${width} × ${height} px`;
+}
+// One repaint per animation frame, like the Library editor's drawEditor.
+function scheduleCaptureDraw(){
+ const session=ui.captureSession;if(!session||session.redrawPending)return;
+ session.redrawPending=true;
+ requestAnimationFrame(()=>{session.redrawPending=false;if(ui.captureSession===session)drawCaptureCanvas();});
+}
+// Shift during a crop drag: a 4x patch of the decoded screenshot beside the pointer, painted in the same frame.
+function drawCaptureMagnifier(c,session,width,height){
+ const m=session.magnifier,base=session.base;
+ if(!m||!base?.complete||!base.naturalWidth)return;
+ const canvas=document.getElementById('capture-canvas'),scale=width/Math.max(1,canvas?.getBoundingClientRect().width||width);
+ const size=140*scale,zoom=4,src=size/zoom,offset=24*scale;
+ let dx=m.x+offset,dy=m.y+offset;
+ if(dx+size>width)dx=m.x-offset-size;
+ if(dy+size>height)dy=m.y-offset-size;
+ dx=Math.max(0,dx);dy=Math.max(0,dy);
+ const sx=Math.max(0,Math.min(width-src,m.x-src/2)),sy=Math.max(0,Math.min(height-src,m.y-src/2));
+ c.save();
+ c.beginPath();c.rect(dx,dy,size,size);c.clip();
+ c.imageSmoothingEnabled=false;
+ c.drawImage(base,sx,sy,src,src,dx,dy,size,size);
+ const cx=dx+(m.x-sx)/src*size,cy=dy+(m.y-sy)/src*size;
+ c.strokeStyle='#ff3b30';c.lineWidth=Math.max(1,scale);
+ c.beginPath();c.moveTo(cx,dy);c.lineTo(cx,dy+size);c.moveTo(dx,cy);c.lineTo(dx+size,cy);c.stroke();
+ c.restore();
+ c.save();c.strokeStyle='#ffffff';c.lineWidth=Math.max(2,2*scale);c.strokeRect(dx,dy,size,size);c.restore();
 }
 function captureCanvasPoint(event){
  const canvas=document.getElementById('capture-canvas');
@@ -580,7 +608,7 @@ function captureCanvasPoint(event){
 // inside that crop (else the whole image); the preview and the committed PNG share both.
 function captureCrop(session){const crop=session.doc.crop;return crop&&crop.width>=8&&crop.height>=8?crop:null;}
 function captureClip(session,width,height){return captureCrop(session)||{x:0,y:0,width,height};}
-function stepCaptureHistory(redo=false){const session=ui.captureSession;if(session&&(redo?annotationEngine.redo:annotationEngine.undo)(session.doc))render();}
+function stepCaptureHistory(redo=false){const session=ui.captureSession;if(session)session.keyNudge=false;if(session&&(redo?annotationEngine.redo:annotationEngine.undo)(session.doc))render();}
 async function commitCaptureSession(){
  const session=ui.captureSession;if(!session||session.busy)return;
  session.busy=true;
@@ -1063,6 +1091,10 @@ document.addEventListener('keydown',async event=>{
  if(ui.modal){if(event.key==='Tab'){const controls=[...overlays.querySelectorAll('button:not([disabled]),input,textarea,select,[tabindex="0"]')];const first=controls[0],last=controls[controls.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}modalKey(event);return;}
  const ctrl=event.ctrlKey||event.metaKey,shortcut=eventShortcut(event);
  if(ui.view==='capture'){
+  const captureSession=ui.captureSession,arrowStep=CAPTURE_ARROWS[event.key];
+  if(captureSession&&!arrowStep&&!['Shift','Alt','Control','Meta'].includes(event.key))captureSession.keyNudge=false;
+  if(event.key==='Shift'&&captureSession&&pointer?.type?.startsWith('capture-crop-')&&pointer.last){captureSession.magnifier={...pointer.last};scheduleCaptureDraw();}
+  if(arrowStep&&captureSession&&!ctrl&&!pointer&&!isEditor(event.target)&&['crop','select','none'].includes(captureSession.tool)&&captureCrop(captureSession)){event.preventDefault();nudgeCaptureCrop(captureSession,arrowStep,event);return;}
   if(event.key==='Escape'){event.preventDefault();await cancelCaptureSession();return;}
   if(event.key==='Enter'&&!event.altKey&&!event.shiftKey){event.preventDefault();await commitCaptureSession();return;}
   // Ctrl+C = Enter (kaydet, panoya kopyala, kapat); metin notu yazarken normal kopyalama kalsın
@@ -1121,8 +1153,21 @@ document.addEventListener('keydown',async event=>{
  if(action==='copy'){await copySelection(event.key==='Enter'&&!ctrl&&!event.altKey&&!event.shiftKey?ui.view==='library':true);return;}
  await perform(action);
 });
-function finishPointerGesture(){const redraw=!!(pointer&&ui.editor),capture=!!(ui.captureSession&&pointer?.type?.startsWith('capture-')&&pointer.type!=='capture-pan');if(pointer?.type==='annotation')annotationEngine.endTool(ui.editor?.doc,pointer.gesture);if(pointer?.type==='capture-annotation')annotationEngine.endTool(ui.captureSession?.doc,pointer.gesture);pointer=null;if(redraw)renderOverlay();if(capture)render();}
-document.addEventListener('keyup',event=>{if(event.code==='Space'){ui.spacePan=false;finishPointerGesture();}});
+const CAPTURE_ARROWS={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]};
+// Plain arrows move the crop 10 px, Shift 1 px; Alt resizes the right/bottom edge by the same steps.
+// Consecutive arrow presses share one history entry (session.keyNudge), cleared by any other action.
+function nudgeCaptureCrop(session,[ux,uy],event){
+ const doc=session.doc,crop=doc.crop,width=session.base?.naturalWidth||session.width,height=session.base?.naturalHeight||session.height,step=event.shiftKey?1:10;
+ let next;
+ if(event.altKey)next={...crop,width:Math.max(8,Math.min(width-crop.x,crop.width+ux*step)),height:Math.max(8,Math.min(height-crop.y,crop.height+uy*step))};
+ else next={...crop,x:Math.max(0,Math.min(width-crop.width,crop.x+ux*step)),y:Math.max(0,Math.min(height-crop.height,crop.y+uy*step))};
+ if(next.x===crop.x&&next.y===crop.y&&next.width===crop.width&&next.height===crop.height)return;
+ if(!session.keyNudge){annotationEngine.checkpoint(doc);session.keyNudge=true;}
+ doc.crop=next;
+ render();
+}
+function finishPointerGesture(){if(ui.captureSession&&ui.captureSession.magnifier)ui.captureSession.magnifier=null;const redraw=!!(pointer&&ui.editor),capture=!!(ui.captureSession&&pointer?.type?.startsWith('capture-')&&pointer.type!=='capture-pan');if(pointer?.type==='annotation')annotationEngine.endTool(ui.editor?.doc,pointer.gesture);if(pointer?.type==='capture-annotation')annotationEngine.endTool(ui.captureSession?.doc,pointer.gesture);pointer=null;if(redraw)renderOverlay();if(capture)render();}
+document.addEventListener('keyup',event=>{if(event.code==='Space'){ui.spacePan=false;finishPointerGesture();}if(event.key==='Shift'&&ui.captureSession?.magnifier){ui.captureSession.magnifier=null;scheduleCaptureDraw();}});
 async function clickAction(target){const action=target.dataset.action;
  if(action==='mini-paste'){const id=target.dataset.id||target.closest?.('.mini-item')?.dataset?.id;if(id)await command('paste',{ids:[id]});return;}
  if(action==='mini-copy'){const id=target.dataset.id;if(id){await command('copy',{ids:[id]});toast(t('Copied'));}return;}
@@ -1194,7 +1239,8 @@ async function clickAction(target){const action=target.dataset.action;
 let cardHoldTimer=null,cardHoldTarget=null,cardHoldStart=null,suppressNextCardClick=false;
 function clearCardHold(){if(cardHoldTimer){clearTimeout(cardHoldTimer);cardHoldTimer=null;}if(cardHoldTarget){cardHoldTarget.classList.remove('pressing');cardHoldTarget=null;}cardHoldStart=null;}
 function capturePointerDown(event){
- const session=ui.captureSession;if(!session)return;
+ const session=ui.captureSession;if(!session||event.button>0)return;
+ session.keyNudge=false;
  const point=captureCanvasPoint(event),doc=session.doc;
  event.currentTarget?.setPointerCapture?.(event.pointerId);
  if(ui.spacePan){pointer={type:'capture-pan',x:event.clientX,y:event.clientY,pan:{...(session.pan||{x:0,y:0})}};return;}
@@ -1204,9 +1250,10 @@ function capturePointerDown(event){
   annotationEngine.checkpoint(doc);
   const crop=doc.crop,canvas=document.getElementById('capture-canvas'),scale=(session.base?.naturalWidth||session.width)/Math.max(1,canvas?.getBoundingClientRect().width||session.width),threshold=14*scale;
   const edges=crop&&crop.width>=8&&crop.height>=8?cropEdges(point,crop,threshold):null;
-  if(edges){pointer={type:'capture-crop-resize',start:point,before:clone(crop),edges};}
-  else if(crop&&crop.width>=8&&crop.height>=8&&within(point,crop)){pointer={type:'capture-crop-move',start:point,before:clone(crop)};}
-  else{doc.crop={x:point.x,y:point.y,width:1,height:1};pointer={type:'capture-crop-new',start:point};}
+  if(edges){pointer={type:'capture-crop-resize',start:point,last:point,before:clone(crop),edges};}
+  else if(crop&&crop.width>=8&&crop.height>=8&&within(point,crop)){pointer={type:'capture-crop-move',start:point,last:point,before:clone(crop)};}
+  else{doc.crop={x:point.x,y:point.y,width:1,height:1};pointer={type:'capture-crop-new',start:point,last:point};}
+  session.magnifier=event.shiftKey?{...point}:null;
   drawCaptureCanvas();return;
  }
  const gesture=annotationEngine.beginTool(doc,session.tool,point,session.style,{shift:event.shiftKey});if(!gesture)return;
@@ -1217,16 +1264,25 @@ function capturePointerMove(event){
  const session=ui.captureSession;if(!session||!pointer)return;
  if(pointer.type==='capture-pan'){session.pan={x:pointer.pan.x+event.clientX-pointer.x,y:pointer.pan.y+event.clientY-pointer.y};updateCaptureTransform();return;}
  const doc=session.doc,point=captureCanvasPoint(event);
- if(pointer.type==='capture-annotation'){annotationEngine.updateTool(doc,pointer.gesture,point,{shift:event.shiftKey});drawCaptureCanvas();return;}
+ if(pointer.type==='capture-annotation'){annotationEngine.updateTool(doc,pointer.gesture,point,{shift:event.shiftKey});scheduleCaptureDraw();return;}
  const dx=point.x-pointer.start.x,dy=point.y-pointer.start.y;
  const width=session.base?.naturalWidth||session.width,height=session.base?.naturalHeight||session.height;
  if(pointer.type==='capture-crop-new'){doc.crop={x:Math.min(point.x,pointer.start.x),y:Math.min(point.y,pointer.start.y),width:Math.max(1,Math.abs(dx)),height:Math.max(1,Math.abs(dy))};}
  else if(pointer.type==='capture-crop-move'){const b=pointer.before;doc.crop={...b,x:Math.max(0,Math.min(width-b.width,b.x+dx)),y:Math.max(0,Math.min(height-b.height,b.y+dy))};}
  else if(pointer.type==='capture-crop-resize'){doc.crop=resizedCrop(pointer.before,pointer.edges,dx,dy,width,height);}
- drawCaptureCanvas();
+ pointer.last=point;session.magnifier=event.shiftKey?{...point}:null;
+ scheduleCaptureDraw();
 }
 document.addEventListener('click',async event=>{if(suppressNextCardClick){suppressNextCardClick=false;event.stopPropagation();return;}if(inspectorDrafts.size&&!await flushInspectorDrafts())return;if(event.target.classList?.contains('modal-backdrop')&&!ui.modal){void closePreview();return;}if(ui.view==='mini'&&event.target.classList?.contains('mini-backdrop')){void command('hide');return;}const miniItem=ui.view==='mini'?event.target.closest('.mini-item'):null;if(miniItem&&!event.target.closest('.mini-item-actions')&&!event.target.closest('button')){void command('paste',{ids:[miniItem.dataset.id]});return;}const target=event.target.closest('[data-action]');if(target){event.stopPropagation();void clickAction(target);return;}const card=event.target.closest('[data-item-id]');if(card){const value=item(card.dataset.itemId);const selectionOnly=event.shiftKey||event.ctrlKey||event.metaKey||ui.selecting;select(value,event.shiftKey,event.ctrlKey||event.metaKey||ui.selecting);render();if(ui.view==='shelves'&&!selectionOnly)void copySelection(true);return;}if(ui.view==='shelves'&&!event.target.closest('.search-hud,.search-summary,.shelf-head,.card,.dialog')&&!ui.preview&&!ui.modal){void perform('hide');}});
-document.addEventListener('dblclick',event=>{clearCardHold();const card=event.target.closest('[data-item-id]');if(card&&!event.target.closest('button')){void openPreview(card.dataset.itemId);return;}if(event.target.id==='markup-canvas'&&ui.editor?.tool==='select'&&ui.editor.doc.selected!=null){const annotation=ui.editor.doc.annotations[ui.editor.doc.selected];if(annotation?.type==='text')openModal({type:'annotation',title:'Text annotation',label:'Text',value:annotation.text,multiline:true,x:annotation.x,y:annotation.y,annotationIndex:ui.editor.doc.selected});}else if(event.target.closest('.image-stage')&&!ui.editor){ui.zoom=1;ui.pan={x:0,y:0};updateTransform();}});
+document.addEventListener('contextmenu',event=>{
+ if(ui.view!=='capture'||!ui.captureSession||ui.modal)return;
+ if(event.target?.id!=='capture-canvas'&&!event.target?.closest?.('.capture-workspace'))return;
+ event.preventDefault();
+ const session=ui.captureSession;session.keyNudge=false;
+ if(!session.doc.crop)return;
+ annotationEngine.checkpoint(session.doc);session.doc.crop=null;render();
+});
+document.addEventListener('dblclick',event=>{clearCardHold();if(ui.view==='capture'&&ui.captureSession&&event.target?.id==='capture-canvas'){if(['crop','select','none'].includes(ui.captureSession.tool))void commitCaptureSession();return;}const card=event.target.closest('[data-item-id]');if(card&&!event.target.closest('button')){void openPreview(card.dataset.itemId);return;}if(event.target.id==='markup-canvas'&&ui.editor?.tool==='select'&&ui.editor.doc.selected!=null){const annotation=ui.editor.doc.annotations[ui.editor.doc.selected];if(annotation?.type==='text')openModal({type:'annotation',title:'Text annotation',label:'Text',value:annotation.text,multiline:true,x:annotation.x,y:annotation.y,annotationIndex:ui.editor.doc.selected});}else if(event.target.closest('.image-stage')&&!ui.editor){ui.zoom=1;ui.pan={x:0,y:0};updateTransform();}});
 document.addEventListener('input',async event=>{const target=event.target;if(target.dataset.videoTrim){updateVideoTrim(target);return;}if(['detail-name','detail-text','detail-note'].includes(target.id)){queueInspectorDraft({'detail-name':'name','detail-text':'text','detail-note':'note'}[target.id],target.value);return;}if(target.id==='mini-search-input'){const start=target.selectionStart;ui.miniSearch=target.value;ui.miniActiveId=null;render();const next=document.getElementById('mini-search-input');next?.focus();next?.setSelectionRange(start,start);return;}if(target.id==='search-input'){if(!await flushInspectorDrafts())return;}if(target.id==='search-input'){const start=target.selectionStart;ui.search=target.value;ui.selected.clear();ui.focus=null;render();const next=document.getElementById('search-input');next?.focus();next?.setSelectionRange(start,start);}
 else if(target.id==='modal-query'){const start=target.selectionStart;ui.modal.query=target.value;ui.modal.index=0;renderOverlay();const field=document.getElementById('modal-query');field?.focus();field?.setSelectionRange(start,start);}
 else if(target.id==='name-input')ui.modal.name=target.value;

@@ -59,9 +59,10 @@ function fixture({deferInitialState=false,initialVisible=true,queuedAnimationFra
  async function key(code,{ctrl=false,alt=false,shift=false,key,target,composing=false,keyCode=0}={}){const event={code,key:key||(/^Key/.test(code)?code.slice(3).toLowerCase():code==='Space'?' ':code),ctrlKey:ctrl,metaKey:false,altKey:alt,shiftKey:shift,repeat:false,isComposing:composing,keyCode,target:target||new Element(),preventDefault(){this.prevented=true;}};for(const listener of listeners.get('keydown')||[])await listener(event);await ready();return event;}
  async function click(action,extra={}){const target=new Element();target.dataset.action=action;Object.assign(target.dataset,extra);target.closest=selector=>selector==='[data-action]'?target:null;for(const listener of listeners.get('click')||[])listener({target,stopPropagation(){}});await ready();}
  async function pointer(type,x,y,{shift=false,canvas='markup-canvas'}={}){const target=document.getElementById(canvas);for(const listener of listeners.get(type)||[])listener({target,clientX:x,clientY:y,pointerId:1,shiftKey:shift,preventDefault(){}});await ready();}
+ async function dispatch(type,{canvas='capture-canvas',...extra}={}){const target=document.getElementById(canvas),event={target,preventDefault(){this.prevented=true;},...extra};for(const listener of listeners.get(type)||[])await listener(event);await ready();return event;}
  async function input(id,value){const target=document.getElementById(id);target.value=value;target.selectionStart=value.length;for(const listener of listeners.get('input')||[])await listener({target});await ready();}
  async function change(id,value){const target=document.getElementById(id);target.value=value;for(const listener of listeners.get('change')||[])await listener({target});await ready();}
- return{drawn,async cardClick(id,{ctrl=false}={}){const card=new Element();card.dataset.itemId=id;card.closest=selector=>selector==='[data-item-id]'?card:null;for(const listener of listeners.get('click')||[])await listener({target:card,ctrlKey:ctrl,metaKey:false,shiftKey:false,stopPropagation(){}});await ready();},grid(columns){document.querySelectorAll=selector=>selector==='.library-grid > .card'?[...document.getElementById('app').innerHTML.matchAll(/<article class="[^"]*"[^>]*data-item-id="([^"]+)"/g)].map((match,index)=>({offsetTop:Math.floor(index/columns)*200,dataset:{itemId:match[1]}})):[];},editor(id){const node=document.getElementById(id);node.tagName='INPUT';node.matches=selector=>selector.includes('input');return node;},ready,key,input,change,click,pointer,async blur(){for(const listener of listeners.get('window:blur')||[])listener();await ready();},imageLoads,paintCalls,markupCalls,animationFrames,flushAnimationFrames(){for(const fn of animationFrames.splice(0))fn();},releaseInitialState(){releaseInitialState?.();},deferReply(action){let release;const promise=new Promise(resolve=>{release=resolve;});delayedReply={action,promise};return release;},deferImageBroadcast({surface=true}={}){deferredImageBroadcast={surface};},releaseImageBroadcast(){const next=pendingImageBroadcast;pendingImageBroadcast=null;if(next)subscriber?.(next);},failExportOnce(){exportFailures++;},failCleanupOnce(){cleanupFailures++;},failEditOnce(){editFailures++;},state,commands,nodes,image,text1,text2,link,api,get main(){return nodes.get('app').innerHTML;},get overlay(){return nodes.get('overlay-root').innerHTML;}};
+ return{drawn,async cardClick(id,{ctrl=false}={}){const card=new Element();card.dataset.itemId=id;card.closest=selector=>selector==='[data-item-id]'?card:null;for(const listener of listeners.get('click')||[])await listener({target:card,ctrlKey:ctrl,metaKey:false,shiftKey:false,stopPropagation(){}});await ready();},grid(columns){document.querySelectorAll=selector=>selector==='.library-grid > .card'?[...document.getElementById('app').innerHTML.matchAll(/<article class="[^"]*"[^>]*data-item-id="([^"]+)"/g)].map((match,index)=>({offsetTop:Math.floor(index/columns)*200,dataset:{itemId:match[1]}})):[];},editor(id){const node=document.getElementById(id);node.tagName='INPUT';node.matches=selector=>selector.includes('input');return node;},ready,key,dispatch,input,change,click,pointer,async blur(){for(const listener of listeners.get('window:blur')||[])listener();await ready();},imageLoads,paintCalls,markupCalls,animationFrames,flushAnimationFrames(){for(const fn of animationFrames.splice(0))fn();},releaseInitialState(){releaseInitialState?.();},deferReply(action){let release;const promise=new Promise(resolve=>{release=resolve;});delayedReply={action,promise};return release;},deferImageBroadcast({surface=true}={}){deferredImageBroadcast={surface};},releaseImageBroadcast(){const next=pendingImageBroadcast;pendingImageBroadcast=null;if(next)subscriber?.(next);},failExportOnce(){exportFailures++;},failCleanupOnce(){cleanupFailures++;},failEditOnce(){editFailures++;},state,commands,nodes,image,text1,text2,link,api,get main(){return nodes.get('app').innerHTML;},get overlay(){return nodes.get('overlay-root').innerHTML;}};
 }
 
 function selectedCards(f){return [...f.main.matchAll(/<article class="([^"]*)"[^>]*data-item-id="([^"]+)"/g)].filter(match=>match[1].split(' ').includes('selected')).map(match=>match[2]);}
@@ -826,6 +827,82 @@ test('capture redo Ctrl+Shift+Z and Ctrl+Y',async()=>{
  await f.click('capture-undo');assert.equal(captureDoc(f).annotations.length,0);await f.click('capture-redo');assert.equal(captureDoc(f).annotations.length,1);
 });
 
+const captureCommits=f=>f.commands.filter(value=>value.action==='commitCapture').length;
+const crop0=async f=>{await captureDrag(f,[100,50],[300,150]);return captureDoc(f).crop;};
+test('arrow keys move crop',async()=>{
+ const f=captureFixture();await f.ready();await crop0(f);
+ await f.key('ArrowRight');await f.key('ArrowDown');
+ assert.deepEqual(captureDoc(f).crop,{x:110,y:60,width:200,height:100});
+ await f.key('ArrowLeft');assert.equal(captureDoc(f).crop.x,100);
+ await f.key('KeyZ',{ctrl:true});assert.deepEqual(captureDoc(f).crop,{x:100,y:50,width:200,height:100},'consecutive arrows are one undo step');
+});
+test('shift+arrow moves crop 1px',async()=>{
+ const f=captureFixture();await f.ready();await crop0(f);
+ await f.key('ArrowRight',{shift:true});await f.key('ArrowUp',{shift:true});
+ assert.deepEqual(captureDoc(f).crop,{x:101,y:49,width:200,height:100});
+});
+test('alt+arrow resizes crop',async()=>{
+ const f=captureFixture();await f.ready();await crop0(f);
+ await f.key('ArrowRight',{alt:true});await f.key('ArrowDown',{alt:true});
+ assert.deepEqual(captureDoc(f).crop,{x:100,y:50,width:210,height:110});
+ await f.key('ArrowLeft',{alt:true});await f.key('ArrowUp',{alt:true});
+ assert.deepEqual(captureDoc(f).crop,{x:100,y:50,width:200,height:100});
+});
+test('alt+shift+arrow resizes 1px',async()=>{
+ const f=captureFixture();await f.ready();await crop0(f);
+ await f.key('ArrowRight',{alt:true,shift:true});await f.key('ArrowDown',{alt:true,shift:true});
+ assert.deepEqual(captureDoc(f).crop,{x:100,y:50,width:201,height:101});
+});
+test('crop clamps to image bounds',async()=>{
+ const f=captureFixture();await f.ready();await crop0(f);
+ for(let i=0;i<30;i++)await f.key('ArrowLeft');for(let i=0;i<30;i++)await f.key('ArrowUp');
+ assert.deepEqual(captureDoc(f).crop,{x:0,y:0,width:200,height:100});
+ for(let i=0;i<100;i++)await f.key('ArrowRight');for(let i=0;i<100;i++)await f.key('ArrowDown');
+ assert.deepEqual(captureDoc(f).crop,{x:700,y:120,width:200,height:100});
+ for(let i=0;i<100;i++)await f.key('ArrowRight',{alt:true});for(let i=0;i<100;i++)await f.key('ArrowDown',{alt:true});
+ assert.deepEqual(captureDoc(f).crop,{x:700,y:120,width:200,height:100});
+});
+test('arrow keys do nothing with a drawing tool or inside a field',async()=>{
+ const f=captureFixture();await f.ready();await crop0(f);
+ await f.key('ArrowRight',{target:f.editor('capture-text')});assert.equal(captureDoc(f).crop.x,100);
+ await f.key('KeyB');await f.key('ArrowRight');assert.equal(captureDoc(f).crop.x,100);
+});
+test('double-click with crop tool commits',async()=>{
+ const f=captureFixture();await f.ready();await crop0(f);
+ await f.dispatch('dblclick');assert.equal(captureCommits(f),1);
+});
+test('double-click with pen tool does not commit',async()=>{
+ const f=captureFixture();await f.ready();await f.key('KeyB');await f.dispatch('dblclick');assert.equal(captureCommits(f),0);
+});
+test('right-click clears crop and keeps annotations',async()=>{
+ const f=captureFixture();await f.ready();await crop0(f);await f.key('KeyR');await captureDrag(f,[120,60],[180,100]);
+ const event=await f.dispatch('contextmenu');
+ assert.equal(event.prevented,true);assert.equal(captureDoc(f).crop,null);assert.equal(captureDoc(f).annotations.length,1);
+ await f.dispatch('pointerdown',{button:2,clientX:5,clientY:5});assert.equal(captureDoc(f).crop,null,'right button never starts a crop');
+});
+test('right-click reset is undoable',async()=>{
+ const f=captureFixture();await f.ready();const crop=await crop0(f);
+ await f.dispatch('contextmenu');assert.equal(captureDoc(f).crop,null);
+ await f.key('KeyZ',{ctrl:true});assert.deepEqual(captureDoc(f).crop,crop);
+});
+test('shift during crop drag shows magnifier',async()=>{
+ const f=captureFixture();await f.ready();
+ const baseDraws=()=>f.paintCalls.filter(value=>value.canvas==='capture-canvas'&&value.operation==='drawImage'&&value.source==='original').length;
+ await capturePointer(f,'pointerdown',100,50);
+ let before=baseDraws();await capturePointer(f,'pointermove',200,100);assert.equal(baseDraws()-before,1,'no magnifier without Shift');
+ before=baseDraws();await capturePointer(f,'pointermove',210,110,{shift:true});assert.equal(baseDraws()-before,2,'magnifier patch painted with Shift');
+ before=baseDraws();await f.dispatch('keyup',{key:'Shift',code:'ShiftLeft'});assert.equal(baseDraws()-before,1,'released Shift repaints without the magnifier');
+ await capturePointer(f,'pointermove',220,110,{shift:true});await capturePointer(f,'pointerup',220,110);
+ before=baseDraws();await f.dispatch('keyup',{key:'Shift',code:'ShiftLeft'});assert.equal(baseDraws()-before,0,'nothing left to hide after the drag');
+});
+test('capture pointer moves repaint at most once per animation frame',async()=>{
+ const f=fixture({queuedAnimationFrames:true});f.api.surface({view:'capture',windowVisible:true,pendingCapture:{id:'cap-1',dataUrl:'data:image/png;base64,AAAA',width:900,height:220}});await f.ready();f.flushAnimationFrames();
+ await capturePointer(f,'pointerdown',100,50);f.flushAnimationFrames();f.paintCalls.length=0;
+ for(const x of [120,140,160,180])await capturePointer(f,'pointermove',x,100);
+ assert.equal(f.animationFrames.length,1);f.flushAnimationFrames();
+ assert.equal(f.paintCalls.filter(value=>value.canvas==='capture-canvas'&&value.operation==='clearRect').length,1);
+ assert.deepEqual(captureDoc(f).crop,{x:100,y:50,width:80,height:50});
+});
 test('capture shift snaps arrow',async()=>{
  const f=captureFixture();await f.ready();await f.key('KeyA');
  await captureDrag(f,[100,100],[200,110],{shift:true});
