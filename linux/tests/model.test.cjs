@@ -138,3 +138,8 @@ test('insertAnnotatedImage rejects >2000 annotations',()=>fixture(s=>{
   assert.throws(()=>s.insertAnnotatedImage(png,Buffer.from('bad'),[]),/Invalid PNG/);
   assert.equal(s.data.items.length,0);
 }));
+test('insertAnnotatedImage items have exactly the keys of insert image items',()=>fixture(s=>{
+  const plain=s.insert('image',png),rendered=Buffer.from(png);rendered[rendered.length-1]^=1;
+  const annotated=s.insertAnnotatedImage(png,rendered,[{type:'marker',x:0,y:0}]);
+  assert.deepEqual(Object.keys(annotated).sort(),Object.keys(plain).sort());
+}));

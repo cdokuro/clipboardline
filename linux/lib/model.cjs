@@ -20,6 +20,13 @@ const DEFAULTS = Object.freeze({
   libraryListColumns:{title:300,kind:80,tags:150,created:130},recentPinFolderIds:[]
 });
 const clone = value => structuredClone(value);
+// One item schema for every insert path, so new fields cannot go missing from one of them.
+function newItem(kind, now, fields = {}) {
+  return {id: crypto.randomUUID(), kind, text: '', html: '', url: '', title: '', name: '', pinned: false, folderIds: [], tags: [],
+    imageFile: '', renderedFile: '', ocrText: '', annotations: [], crop: null, note:'', retainedAt:null, lastCopiedAt:null, createdAt: now, updatedAt: now, trashedAt: null, hiddenFromShelf: false, ...fields};
+}
+// Annotation limits shared by saveImage and insertAnnotatedImage.
+const validEditAnnotations = annotations => Array.isArray(annotations) && annotations.length <= 2000 && JSON.stringify(annotations).length <= 2_000_000;
 const fail = message => { throw new Error(message); };
 function incompleteDeletion(message){const error=new Error('Permanent deletion is incomplete. '+message+' Retry cleanup in Settings.');error.committed=true;return error;}
 function text(value, maximum = 1024 * 1024, empty = false) {
@@ -254,8 +261,7 @@ class Store {
     const prior = matching.sort((a, b) => b.updatedAt - a.updatedAt)[0];
     if(!prior&&this.data.items.length>=20000)fail('Library item limit reached');
     const now = this.clock();
-    const item = prior || {id: crypto.randomUUID(), kind, text: textValue, html: extra.html ? text(extra.html, 2 * 1024 * 1024, true) : '', url, title: '', name: '', pinned: false, folderIds: [], tags: [],
-      imageFile, renderedFile: '', ocrText: '', annotations: [], crop: null, note:'', retainedAt:null, lastCopiedAt:null, createdAt: now, updatedAt: now, trashedAt: null, hiddenFromShelf: false};
+    const item = prior || newItem(kind, now, {text: textValue, html: extra.html ? text(extra.html, 2 * 1024 * 1024, true) : '', url, imageFile});
     item.createdAt = now; item.updatedAt = now; item.hiddenFromShelf = false;item.captureRevision=crypto.randomUUID();
     if(kind==='text')item.text=textValue;
     if (extra.html !== undefined) item.html = extra.html ? text(extra.html, 2 * 1024 * 1024, true) : '';
@@ -273,12 +279,11 @@ class Store {
   // A capture with annotations is an editable document: always a new item (no
   // hash reuse), original = clean cropped base, rendered = what was copied.
   insertAnnotatedImage(originalPng, renderedPng, annotations) {
-    if (!Array.isArray(annotations) || annotations.length > 2000 || JSON.stringify(annotations).length > 2_000_000) fail('Invalid image edit metadata');
+    if (!validEditAnnotations(annotations)) fail('Invalid image edit metadata');
     const imageFile = this.putPNG(originalPng), renderedFile = this.putPNG(renderedPng);
     if(this.data.items.length>=20000)fail('Library item limit reached');
     const now = this.clock();
-    const item = {id: crypto.randomUUID(), kind: 'image', text: '', html: '', url: '', title: '', name: '', pinned: false, folderIds: [], tags: [],
-      imageFile, renderedFile, ocrText: '', annotations: clone(annotations), crop: null, note:'', retainedAt:null, lastCopiedAt:null, createdAt: now, updatedAt: now, trashedAt: null, hiddenFromShelf: false, captureRevision: crypto.randomUUID()};
+    const item = newItem('image', now, {imageFile, renderedFile, annotations: clone(annotations), captureRevision: crypto.randomUUID()});
     this.data.items = [item, ...this.data.items];
     this.expire(false); this.persist(); return item;
   }
@@ -410,7 +415,7 @@ class Store {
       else if (action === 'saveImage') {
         if (item.kind !== 'image' || item.recording || typeof payload.dataUrl !== 'string' || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(payload.dataUrl) || payload.dataUrl.length > 90_000_000) fail('Invalid image edit');
         const annotations = payload.annotations ?? []; const crop = payload.crop ?? null;
-        if (!Array.isArray(annotations) || annotations.length > 2000 || JSON.stringify(annotations).length > 2_000_000 || (crop !== null && (typeof crop !== 'object' || ['x','y','width','height'].some(k => !Number.isFinite(crop[k])) || crop.x<0 || crop.y<0 || crop.width<=0 || crop.height<=0))) fail('Invalid image edit metadata');
+        if (!validEditAnnotations(annotations) || (crop !== null && (typeof crop !== 'object' || ['x','y','width','height'].some(k => !Number.isFinite(crop[k])) || crop.x<0 || crop.y<0 || crop.width<=0 || crop.height<=0))) fail('Invalid image edit metadata');
         if(crop){const original=fs.readFileSync(this.mediaPath(item.id,true));if(crop.x+crop.width>original.readUInt32BE(16)||crop.y+crop.height>original.readUInt32BE(20))fail('Crop is outside the original image');}
         item.renderedFile = this.putPNG(Buffer.from(payload.dataUrl.split(',')[1], 'base64')); item.annotations = clone(annotations); item.crop = clone(crop); item.ocrText = '';
       } else if (action === 'delete') { if (!item.trashedAt) fail('Move items to Trash before permanent deletion'); }
