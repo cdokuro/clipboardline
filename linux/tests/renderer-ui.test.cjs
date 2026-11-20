@@ -968,6 +968,19 @@ test('editor style edits apply to the selection only with the select tool',async
  await f.input('font-color','#0000ff');assert.equal((await savedMarkup(f))[0].fontColor,'#0000ff');
 });
 
+test('capture main colour also colours new text; the text colour picker still overrides',async()=>{
+ const f=captureFixture();await f.ready();
+ await f.input('capture-color','#0000ff');assert.equal(f.nodes.get('capture-font-color').value,'#0000ff','text colour picker follows');
+ await captureText(f,100,100,'Hi');assert.equal(captureDoc(f).annotations[0].fontColor,'#0000ff');
+ await f.input('capture-font-color','#00ff00');await captureText(f,300,100,'Yo');assert.equal(captureDoc(f).annotations[1].fontColor,'#00ff00');
+ await f.key('KeyV');await capturePointer(f,'pointerdown',110,90);await capturePointer(f,'pointerup',110,90);
+ await f.input('capture-color','#123456');assert.deepEqual([captureDoc(f).annotations[0].color,captureDoc(f).annotations[0].fontColor],['#123456','#123456'],'select tool: main colour recolours the selected text');assert.equal(captureDoc(f).annotations[1].fontColor,'#00ff00');
+});
+test('editor main colour also colours new text',async()=>{
+ const f=fixture();await openMarkup(f);await f.input('ink-color','#0000ff');await f.click('image-tool',{tool:'text'});
+ await f.pointer('pointerdown',100,100);await f.pointer('pointerup',100,100);await f.input('simple-input','Hi');await f.click('confirm-modal');
+ const [text]=await savedMarkup(f);assert.equal(text.color,'#0000ff');assert.equal(text.fontColor,'#0000ff');
+});
 test('capture and editor markup labels are translated to Turkish',async()=>{
  const f=captureFixture();await f.ready();f.api.emit({settings:{...f.state.settings,language:'tr'}});await f.ready();
  for(const label of ['Numara damgası','Bulanıklaştır','Pikselleştir','Dolgu rengi','Yazı tipi','Metin rengi','Gölge','Efekt gücü','Sonraki numara','Yinele'])assert.ok(f.main.includes(label),label);
