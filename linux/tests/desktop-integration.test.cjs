@@ -76,7 +76,7 @@ test('scanCodes maps exit codes',async()=>{
  const r=await di.scanCodes('/x/a b.png',{execFile:ok});
  assert.deepEqual(r,{available:true,codes:[{type:'QR-Code',text:'hi',binary:false}]});
  assert.equal(calls[0].cmd,'zbarimg');
- assert.deepEqual(calls[0].args,['--xml','-q','--nodbus','-Sbinary','/x/a b.png']);
+ assert.deepEqual(calls[0].args,['--xml','-q','--nodbus','-Sqrcode.binary','/x/a b.png']);
  assert.equal(calls[0].opts.timeout,10000);
  assert.equal(calls[0].opts.maxBuffer,4*1024*1024);
  const boom=async()=>{const e=new Error('killed');e.code=1;throw e;};

@@ -124,7 +124,7 @@ function parseZbarXml(xml){
 
 async function scanCodes(file,{execFile=promisify(childProcess.execFile),env=process.env}={}){
  try{
-  const r=await execFile('zbarimg',['--xml','-q','--nodbus','-Sbinary',file],{timeout:10000,maxBuffer:4*1024*1024,env,encoding:'utf8'});
+  const r=await execFile('zbarimg',['--xml','-q','--nodbus','-Sqrcode.binary',file],{timeout:10000,maxBuffer:4*1024*1024,env,encoding:'utf8'});
   return{available:true,codes:parseZbarXml(r&&r.stdout)};
  }catch(e){
   if(e&&e.code==='ENOENT')return{available:false,codes:[]};
