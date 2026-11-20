@@ -885,9 +885,18 @@ test('arrow keys do nothing with a drawing tool or inside a field',async()=>{
  await f.key('ArrowRight',{target:f.editor('capture-text')});assert.equal(captureDoc(f).crop.x,100);
  await f.key('KeyB');await f.key('ArrowRight');assert.equal(captureDoc(f).crop.x,100);
 });
+// A real double-click: two presses (the second with detail 2) then dblclick at the same point.
+async function captureDoubleClick(f,x,y){for(const detail of [1,2]){await f.dispatch('pointerdown',{clientX:x,clientY:y,pointerId:1,detail});await f.dispatch('pointerup',{clientX:x,clientY:y,pointerId:1,detail});}await f.dispatch('dblclick',{clientX:x,clientY:y,detail:2});}
 test('double-click with crop tool commits',async()=>{
  const f=captureFixture();await f.ready();await crop0(f);
- await f.dispatch('dblclick');assert.equal(captureCommits(f),1);
+ await captureDoubleClick(f,200,100);assert.equal(captureCommits(f),1);
+});
+test('double-click outside the crop does not commit and keeps the crop',async()=>{
+ const f=captureFixture();await f.ready();const crop=await crop0(f);
+ await captureDoubleClick(f,600,180);
+ assert.equal(captureCommits(f),0,'outside the selection is not a commit');
+ assert.deepEqual(captureDoc(f).crop,crop,'the clicks of a double-click do not replace the crop');
+ await captureDoubleClick(f,150,80);assert.equal(captureCommits(f),1,'inside commits exactly once');
 });
 test('double-click with pen tool does not commit',async()=>{
  const f=captureFixture();await f.ready();await f.key('KeyB');await f.dispatch('dblclick');assert.equal(captureCommits(f),0);

@@ -608,6 +608,14 @@ function captureCanvasPoint(event){
 // inside that crop (else the whole image); the preview and the committed PNG share both.
 function captureCrop(session){const crop=session.doc.crop;return crop&&crop.width>=8&&crop.height>=8?crop:null;}
 function captureClip(session,width,height){return captureCrop(session)||{x:0,y:0,width,height};}
+// Spec S4: double-click commits only inside the selection (the crop as it was before the
+// double-click's presses); with no crop the whole screen is the selection.
+function captureDoubleClickCommits(session,event){
+ if(!['crop','select','none'].includes(session.tool))return false;
+ const press=session.tool==='crop'&&session.cropPress&&Date.now()-session.cropPress.time<1000?session.cropPress:null;
+ const crop=press?press.before:session.doc.crop;
+ return !(crop&&crop.width>=8&&crop.height>=8)||within(captureCanvasPoint(event),crop);
+}
 function stepCaptureHistory(redo=false){const session=ui.captureSession;if(session)session.keyNudge=false;if(session&&(redo?annotationEngine.redo:annotationEngine.undo)(session.doc))render();}
 // Same shift as a select-tool move: x/y and every pen/marker point.
 function offsetCaptureAnnotations(annotations,dx,dy){return annotations.map(value=>{const a=JSON.parse(JSON.stringify(value));if(Number.isFinite(a.x))a.x-=dx;if(Number.isFinite(a.y))a.y-=dy;if(Array.isArray(a.points))a.points=a.points.map(p=>({x:p.x-dx,y:p.y-dy}));return a;});}
@@ -1249,9 +1257,18 @@ function capturePointerDown(event){
  if(ui.spacePan){pointer={type:'capture-pan',x:event.clientX,y:event.clientY,pan:{...(session.pan||{x:0,y:0})}};return;}
  if(session.tool==='text'){openModal({type:'annotation',title:'Text annotation',label:'Text',value:'',multiline:true,x:point.x,y:point.y});return;}
  if(session.tool==='crop'){
+  const canvas=document.getElementById('capture-canvas'),scale=(session.base?.naturalWidth||session.width)/Math.max(1,canvas?.getBoundingClientRect().width||session.width),threshold=14*scale;
+  // The second press of a double-click never starts or replaces a crop: it puts back the
+  // crop from before the first press (which may have started a 1x1 one) for dblclick to test.
+  const now=Date.now(),last=session.cropPress;
+  if(event.detail>=2||(last&&now-last.time<500&&Math.hypot(point.x-last.point.x,point.y-last.point.y)<=4*scale)){
+   if(last){doc.crop=last.before?clone(last.before):null;if(doc.history.length===last.depth+1)doc.history.pop();}
+   pointer=null;drawCaptureCanvas();return;
+  }
+  session.cropPress={time:now,point,before:doc.crop?clone(doc.crop):null,depth:doc.history.length};
   // Crop is adapter-owned but lives in doc.crop, so this checkpoint lets undo/redo cover it.
   annotationEngine.checkpoint(doc);
-  const crop=doc.crop,canvas=document.getElementById('capture-canvas'),scale=(session.base?.naturalWidth||session.width)/Math.max(1,canvas?.getBoundingClientRect().width||session.width),threshold=14*scale;
+  const crop=doc.crop;
   const edges=crop&&crop.width>=8&&crop.height>=8?cropEdges(point,crop,threshold):null;
   if(edges){pointer={type:'capture-crop-resize',start:point,last:point,before:clone(crop),edges};}
   else if(crop&&crop.width>=8&&crop.height>=8&&within(point,crop)){pointer={type:'capture-crop-move',start:point,last:point,before:clone(crop)};}
@@ -1285,7 +1302,7 @@ document.addEventListener('contextmenu',event=>{
  if(!session.doc.crop)return;
  annotationEngine.checkpoint(session.doc);session.doc.crop=null;render();
 });
-document.addEventListener('dblclick',event=>{clearCardHold();if(ui.view==='capture'&&ui.captureSession&&event.target?.id==='capture-canvas'){if(['crop','select','none'].includes(ui.captureSession.tool))void commitCaptureSession();return;}const card=event.target.closest('[data-item-id]');if(card&&!event.target.closest('button')){void openPreview(card.dataset.itemId);return;}if(event.target.id==='markup-canvas'&&ui.editor?.tool==='select'&&ui.editor.doc.selected!=null){const annotation=ui.editor.doc.annotations[ui.editor.doc.selected];if(annotation?.type==='text')openModal({type:'annotation',title:'Text annotation',label:'Text',value:annotation.text,multiline:true,x:annotation.x,y:annotation.y,annotationIndex:ui.editor.doc.selected});}else if(event.target.closest('.image-stage')&&!ui.editor){ui.zoom=1;ui.pan={x:0,y:0};updateTransform();}});
+document.addEventListener('dblclick',event=>{clearCardHold();if(ui.view==='capture'&&ui.captureSession&&event.target?.id==='capture-canvas'){if(captureDoubleClickCommits(ui.captureSession,event))void commitCaptureSession();return;}const card=event.target.closest('[data-item-id]');if(card&&!event.target.closest('button')){void openPreview(card.dataset.itemId);return;}if(event.target.id==='markup-canvas'&&ui.editor?.tool==='select'&&ui.editor.doc.selected!=null){const annotation=ui.editor.doc.annotations[ui.editor.doc.selected];if(annotation?.type==='text')openModal({type:'annotation',title:'Text annotation',label:'Text',value:annotation.text,multiline:true,x:annotation.x,y:annotation.y,annotationIndex:ui.editor.doc.selected});}else if(event.target.closest('.image-stage')&&!ui.editor){ui.zoom=1;ui.pan={x:0,y:0};updateTransform();}});
 document.addEventListener('input',async event=>{const target=event.target;if(target.dataset.videoTrim){updateVideoTrim(target);return;}if(['detail-name','detail-text','detail-note'].includes(target.id)){queueInspectorDraft({'detail-name':'name','detail-text':'text','detail-note':'note'}[target.id],target.value);return;}if(target.id==='mini-search-input'){const start=target.selectionStart;ui.miniSearch=target.value;ui.miniActiveId=null;render();const next=document.getElementById('mini-search-input');next?.focus();next?.setSelectionRange(start,start);return;}if(target.id==='search-input'){if(!await flushInspectorDrafts())return;}if(target.id==='search-input'){const start=target.selectionStart;ui.search=target.value;ui.selected.clear();ui.focus=null;render();const next=document.getElementById('search-input');next?.focus();next?.setSelectionRange(start,start);}
 else if(target.id==='modal-query'){const start=target.selectionStart;ui.modal.query=target.value;ui.modal.index=0;renderOverlay();const field=document.getElementById('modal-query');field?.focus();field?.setSelectionRange(start,start);}
 else if(target.id==='name-input')ui.modal.name=target.value;
