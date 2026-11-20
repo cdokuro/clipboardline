@@ -129,6 +129,7 @@ class OutputActions {
       });
       if (!result || result.canceled || !result.filePath) return { canceled: true };
       file = result.filePath;
+      if (typeof file !== 'string' || !path.isAbsolute(file)) fail('Invalid save path');
       const chosen = formatFromExtension(path.extname(file));
       // Only the exact path the user confirmed in the dialog may be overwritten.
       if (chosen) { format = chosen; confirmed = true; } else file += FORMATS[format].extension;
@@ -202,12 +203,17 @@ class OutputActions {
       }
     } catch { /* ignore */ }
     if (saved) return saved;
-    const name = fileBaseName(this.settings().output.filenameTemplate, this.now(), { title: item.name || item.title || '' }) + '-' + crypto.randomBytes(3).toString('hex') + '.png';
-    const file = path.join(this.tempDirectory, name);
-    await this.fs.copyFile(this.store.mediaPath(id), file);
-    await this.fs.chmod(file, 0o600);
-    return file;
+    const base = fileBaseName(this.settings().output.filenameTemplate, this.now(), { title: item.name || item.title || '' });
+    const bytes = await this.fs.readFile(this.store.mediaPath(id));
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const file = path.join(this.tempDirectory, base + '-' + this.suffix() + '.png');
+      try { await this.fs.writeFile(file, bytes, { flag: 'wx', mode: 0o600 }); return file; } // O_EXCL: never follows or replaces an existing entry
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+    }
+    fail('A temporary filename could not be created');
   }
+
+  suffix() { return crypto.randomBytes(3).toString('hex'); }
 
   async cleanup() {
     await this.fs.rm(this.tempDirectory, { recursive: true, force: true });

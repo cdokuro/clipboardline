@@ -158,3 +158,16 @@ test('externalFile names are unique per call',()=>fixture(async({actions,item,st
   const a=await actions.externalFile(item.id),b=await actions.externalFile(second.id);
   assert.notEqual(a,b);assert.match(path.basename(a),/-[0-9a-f]{6}\.png$/);
 }));
+test('externalFile never overwrites or follows an existing temp entry',()=>fixture(async({actions,item,runtimeDir})=>{
+  const temp=path.join(runtimeDir,'clipboardline-output');fs.mkdirSync(temp,{mode:0o700});
+  const victim=path.join(runtimeDir,'victim');fs.writeFileSync(victim,'keep');
+  const base='Screenshot_20261120_090507';
+  fs.writeFileSync(path.join(temp,base+'-aaaaaa.png'),'planted');fs.symlinkSync(victim,path.join(temp,base+'-bbbbbb.png'));
+  const names=['aaaaaa','bbbbbb','cccccc'];actions.suffix=()=>names.shift();
+  const file=await actions.externalFile(item.id);
+  assert.equal(path.basename(file),base+'-cccccc.png');assert.deepEqual(fs.readFileSync(file),png);assert.equal(fs.statSync(file).mode&0o777,0o600);
+  assert.equal(fs.readFileSync(path.join(temp,base+'-aaaaaa.png'),'utf8'),'planted');assert.equal(fs.readFileSync(victim,'utf8'),'keep');
+}));
+test('saveAs rejects a relative dialog path',()=>fixture(async({actions,item,state})=>{
+  state.dialogResult={canceled:false,filePath:'rel/shot.png'};await assert.rejects(actions.plan(item.id,'saveAs'),/Invalid save path/);
+}));
