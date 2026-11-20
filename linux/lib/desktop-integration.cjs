@@ -61,6 +61,7 @@ async function imageApps({env=process.env,home,language='en',fs=nodeFs,mime='ima
  }
  const apps=[],seen=new Set();
  for(const id of [...defaults,...added,...cached]){
+  if(!/^[A-Za-z0-9._+-]+\.desktop$/.test(id)||id.includes('..'))continue;
   if(seen.has(id))continue;
   seen.add(id);
   if(removed.has(id))continue;
@@ -103,10 +104,10 @@ function dataContent(raw){
 
 function parseZbarXml(xml){
  const out=[];
- const symRe=/<symbol\b([^>]*)>([\s\S]*?)<\/symbol>/g;let m;
+ const symRe=/<symbol\b([^>]*)>((?:<!\[CDATA\[[\s\S]*?\]\]>|[^<]|<(?!\/symbol>|!\[CDATA\[))*)<\/symbol>/g;let m;
  while((m=symRe.exec(String(xml||'')))){
   const type=(/\btype=['"]([^'"]*)['"]/.exec(m[1])||[])[1]||'';
-  const d=/<data\b([^>]*)>([\s\S]*?)<\/data>/.exec(m[2]);
+  const d=/<data\b([^>]*)>((?:<!\[CDATA\[[\s\S]*?\]\]>|[^<]|<(?!\/data>|!\[CDATA\[))*)<\/data>/.exec(m[2]);
   if(!d)continue;
   const content=dataContent(d[2]);
   let bytes;

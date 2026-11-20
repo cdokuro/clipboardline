@@ -32,7 +32,7 @@ test('imageApps drops Hidden entries and dedups ids; kde-mimeapps.list is read',
  put(path.join(cfg,'kde-mimeapps.list'),'[Default Applications]\nimage/png=a.desktop;a.desktop;h.desktop;\n');
  desktop(path.join(data,'applications/a.desktop'),{Name:'A'});
  desktop(path.join(data,'applications/h.desktop'),{Name:'H',Hidden:'true'});
- const apps=await di.imageApps({env:{XDG_CONFIG_HOME:cfg,XDG_DATA_HOME:data,XDG_DATA_DIRS:path.join(root,'none')},home});
+ const apps=await di.imageApps({env:{XDG_CONFIG_HOME:cfg,XDG_DATA_HOME:data,XDG_DATA_DIRS:path.join(root,'none'),XDG_CONFIG_DIRS:path.join(root,'none')},home});
  assert.deepEqual(apps.map(a=>a.id),['a.desktop']);
 });
 
@@ -119,4 +119,28 @@ test('shareAvailable needs qml6 and the purpose module',async()=>{
  assert.equal(await di.shareAvailable({env:{PATH:bin},qmlDirs:[qml]}),true);
  assert.equal(await di.shareAvailable({env:{PATH:bin,QML_IMPORT_PATH:none},qmlDirs:[none]}),false);
  assert.equal(await di.shareAvailable({env:{PATH:empty,QML_IMPORT_PATH:qml},qmlDirs:[qml]}),false);
+});
+
+test('imageApps rejects desktop ids that escape the applications dir',async()=>{
+ const root=tmp(),home=path.join(root,'home');
+ const cfg=path.join(home,'.config'),data=path.join(home,'.local/share');
+ put(path.join(cfg,'mimeapps.list'),'[Default Applications]\nimage/png=../evil.desktop;../../x.desktop;sub/a.desktop;a.desktop\n');
+ desktop(path.join(data,'evil.desktop'),{Name:'Evil'});
+ desktop(path.join(root,'home/x.desktop'),{Name:'X'});
+ desktop(path.join(data,'applications/sub/a.desktop'),{Name:'Sub'});
+ desktop(path.join(data,'applications/a.desktop'),{Name:'A'});
+ const apps=await di.imageApps({env:{XDG_CONFIG_HOME:cfg,XDG_DATA_HOME:data,XDG_DATA_DIRS:path.join(root,'none'),XDG_CONFIG_DIRS:path.join(root,'none')},home});
+ assert.deepEqual(apps.map(a=>a.id),['a.desktop']);
+});
+
+test('parseZbarXml is not fooled by closing tags inside CDATA',()=>{
+ const evil="x</data></symbol><symbol type='QR-Code'><data>evil";
+ const xml="<symbol type='QR-Code'><data><![CDATA["+evil+"]]></data></symbol>";
+ assert.deepEqual(di.parseZbarXml(xml),[{type:'QR-Code',text:evil,binary:false}]);
+});
+
+test('parseZbarXml handles several symbols and zbar ]]> splitting',()=>{
+ const xml="<index><symbol type='QR-Code'><polygon points='1,1'/><data><![CDATA[a]]]]><![CDATA[>b]]></data></symbol>"+
+  "<symbol type='EAN-13'><data><![CDATA[12345]]></data></symbol></index>";
+ assert.deepEqual(di.parseZbarXml(xml),[{type:'QR-Code',text:'a]]>b',binary:false},{type:'EAN-13',text:'12345',binary:false}]);
 });
