@@ -104,19 +104,29 @@
   return made;
  }
  const defaultCanvas=()=>typeof document==='object'?document.createElement('canvas'):null;
+ // Blur samples the rect padded by 2x radius (inside clip and the image) so the box edge mixes
+ // real neighbours, not transparency; the scratch gets an opaque underlay (a 1px sample of the
+ // same area stretched over it) so the sharp original never shows through where clip limits padding.
  function drawBlur(ctx,annotation,base,clip,createCanvas){
   const r=regionOf(annotation,clip);if(!base||!r)return;
   const make=createCanvas||defaultCanvas;if(typeof make!=='function')return;
-  const radius=blurRadius(annotation.strength);
-  const scratch=cachedRender(base,`blur|${r.x}|${r.y}|${r.width}|${r.height}|${radius}`,()=>{
-   const canvas=make();if(!canvas)return null;canvas.width=Math.ceil(r.width);canvas.height=Math.ceil(r.height);
+  const radius=blurRadius(annotation.strength),pad=radius*2;
+  let x0=Math.max(0,r.x-pad),y0=Math.max(0,r.y-pad),x1=r.x+r.width+pad,y1=r.y+r.height+pad;
+  if(clip){x0=Math.max(x0,clip.x);y0=Math.max(y0,clip.y);x1=Math.min(x1,clip.x+clip.width);y1=Math.min(y1,clip.y+clip.height);}
+  const bw=base.naturalWidth||base.width,bh=base.naturalHeight||base.height;
+  if(Number.isFinite(bw)&&bw>0)x1=Math.min(x1,bw);if(Number.isFinite(bh)&&bh>0)y1=Math.min(y1,bh);
+  const src={x:x0,y:y0,width:x1-x0,height:y1-y0};
+  const scratch=cachedRender(base,`blur|${r.x}|${r.y}|${r.width}|${r.height}|${radius}|${src.x}|${src.y}|${src.width}|${src.height}`,()=>{
+   const canvas=make();if(!canvas)return null;canvas.width=Math.ceil(src.width);canvas.height=Math.ceil(src.height);
    const sctx=canvas.getContext('2d');if(!sctx)return null;
-   sctx.filter=`blur(${radius}px)`;sctx.drawImage(base,r.x,r.y,r.width,r.height,0,0,r.width,r.height);
+   sctx.drawImage(base,src.x,src.y,src.width,src.height,0,0,1,1);
+   sctx.drawImage(canvas,0,0,1,1,0,0,canvas.width,canvas.height);
+   sctx.filter=`blur(${radius}px)`;sctx.drawImage(base,src.x,src.y,src.width,src.height,0,0,src.width,src.height);
    return canvas;
   });
   if(!scratch)return;
   ctx.beginPath();ctx.rect(r.x,r.y,r.width,r.height);ctx.clip();
-  ctx.drawImage(scratch,0,0,r.width,r.height,r.x,r.y,r.width,r.height);
+  ctx.drawImage(scratch,r.x-src.x,r.y-src.y,r.width,r.height,r.x,r.y,r.width,r.height);
  }
  function drawPixelate(ctx,annotation,base,clip,createCanvas){
   const r=regionOf(annotation,clip);if(!base||!r)return;

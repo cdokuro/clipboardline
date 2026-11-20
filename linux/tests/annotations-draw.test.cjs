@@ -63,21 +63,39 @@ test('pixelate draws from base with cell size from strength',()=>{
  A.drawAnnotations(recorder().ctx,[{type:'pixelate',x:10,y:20,width:100,height:60,strength:10}],{base:BASE,createCanvas:weak.create});
  assert.ok(weak.made[0].width>f.made[0].width);
 });
-test('blur draws from base with filter from strength',()=>{
- const f=scratchFactory(),r=recorder();
- A.drawAnnotations(r.ctx,[{type:'blur',x:10,y:20,width:100,height:60,strength:50}],{base:{},createCanvas:f.create});
- const sc=f.made[0];
+// Blur samples the rect padded by 2x radius (within clip and the image), so the box edge
+// blurs real neighbours; an opaque underlay keeps the sharp original from showing through.
+const blurSource=sc=>{const draws=invoked(sc.calls,'drawImage'),filterAt=sc.calls.findIndex(c=>c[0]==='set'&&c[1]==='filter');return{draws,filterAt,blurAt:sc.calls.findIndex((c,i)=>i>filterAt&&c[0]==='call'&&c[1]==='drawImage')};};
+test('blur draws a padded source with filter from strength over an opaque underlay',()=>{
+ const f=scratchFactory(),r=recorder(),base={};
+ A.drawAnnotations(r.ctx,[{type:'blur',x:40,y:30,width:100,height:60,strength:50}],{base,clip:{x:0,y:0,width:400,height:300},createCanvas:f.create});
+ const sc=f.made[0],{draws,filterAt,blurAt}=blurSource(sc);
  assert.equal(sets(sc.calls,'filter')[0],'blur(10px)');
- const src=invoked(sc.calls,'drawImage')[0];assert.deepEqual(src.slice(1),[10,20,100,60,0,0,100,60]);
- const out=invoked(r.calls,'drawImage')[0];assert.equal(out[0],sc);assert.deepEqual(out.slice(1),[0,0,100,60,10,20,100,60]);
+ assert.deepEqual([sc.width,sc.height],[140,100],'rect padded by 2x radius (20px) on every side');
+ assert.deepEqual(sc.calls[blurAt][2].slice(1),[20,10,140,100,0,0,140,100],'blurred source is the padded area');
+ assert.equal(draws.length,3,'underlay sample, underlay fill, blurred source');
+ assert.ok(sc.calls.findIndex(c=>c[1]==='drawImage')<filterAt,'underlay painted before the blur filter');
+ assert.equal(draws[0][0],base);assert.deepEqual(draws[0].slice(1),[20,10,140,100,0,0,1,1],'underlay colour sampled from the same area');
+ assert.equal(draws[1][0],sc);assert.deepEqual(draws[1].slice(1),[0,0,1,1,0,0,140,100],'underlay covers the whole scratch');
+ assert.deepEqual(invoked(r.calls,'rect')[0],[40,30,100,60]);assert.equal(invoked(r.calls,'clip').length,1);
+ const out=invoked(r.calls,'drawImage')[0];assert.equal(out[0],sc);assert.deepEqual(out.slice(1),[20,20,100,60,40,30,100,60]);
 });
 test('blur clamps to clip rect',()=>{
  const f=scratchFactory(),r=recorder();
  A.drawAnnotations(r.ctx,[{type:'blur',x:-50,y:0,width:100,height:40,strength:50}],{base:{},clip:{x:0,y:0,width:200,height:200},createCanvas:f.create});
- assert.deepEqual(invoked(f.made[0].calls,'drawImage')[0].slice(1),[0,0,50,40,0,0,50,40]);
+ const sc=f.made[0];
+ assert.deepEqual(sc.calls[blurSource(sc).blurAt][2].slice(1),[0,0,70,60,0,0,70,60],'padding limited by clip');
  assert.deepEqual(invoked(r.calls,'drawImage')[0].slice(1),[0,0,50,40,0,0,50,40]);
  assert.deepEqual(invoked(r.calls,'rect')[0],[0,0,50,40]);
  assert.equal(invoked(r.calls,'clip').length,1);
+});
+test('blur padding stays inside a crop clip',()=>{
+ const f=scratchFactory(),r=recorder(),clip={x:100,y:50,width:200,height:100};
+ A.drawAnnotations(r.ctx,[{type:'blur',x:110,y:60,width:50,height:30,strength:50}],{base:{},clip,createCanvas:f.create});
+ const sc=f.made[0],src=sc.calls[blurSource(sc).blurAt][2].slice(1,5);
+ assert.deepEqual(src,[100,50,80,60]);
+ assert.ok(src[0]>=clip.x&&src[1]>=clip.y&&src[0]+src[2]<=clip.x+clip.width&&src[1]+src[3]<=clip.y+clip.height,'never samples outside the clip');
+ assert.deepEqual(invoked(r.calls,'drawImage')[0].slice(1),[10,10,50,30,110,60,50,30]);
 });
 test('pixelate clamps to clip rect',()=>{
  const f=scratchFactory(),r=recorder();
@@ -104,7 +122,7 @@ test('blur/pixelate renders are cached per base, rect, clip and strength',()=>{
 test('blur handles negative size and draws nothing outside clip or without base',()=>{
  const r=recorder();
  A.drawAnnotations(r.ctx,[{type:'blur',x:60,y:40,width:-40,height:-30,strength:50}],{base:BASE,createCanvas:scratchFactory().create});
- assert.deepEqual(invoked(r.calls,'drawImage')[0].slice(1,5),[0,0,40,30]);
+ assert.deepEqual(invoked(r.calls,'drawImage')[0].slice(1,5),[20,10,40,30]);
  const out=recorder();
  A.drawAnnotations(out.ctx,[{type:'blur',x:300,y:0,width:20,height:20,strength:50}],{base:BASE,clip:{x:0,y:0,width:100,height:100},createCanvas:scratchFactory().create});
  assert.equal(invoked(out.calls,'drawImage').length,0);
