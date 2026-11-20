@@ -21,7 +21,7 @@ function fixture({deferInitialState=false,initialVisible=true,queuedAnimationFra
   constructor(id=''){super(id);this.width=900;this.height=220;}
   getBoundingClientRect(){return{left:0,top:0,width:900,height:220};}
   getContext(){const canvas=this,record=entry=>{if(canvas.id==='markup-canvas')markupCalls.push(entry);};return new Proxy({}, {get(object,key){if(key in object)return object[key];return(...args)=>{if(typeof key==='string')record(['call',key,JSON.parse(JSON.stringify(args.map(value=>value instanceof Element?'element':value)))]);if(key==='drawImage'||key==='clearRect')paintCalls.push({canvas:canvas.id,operation:key,source:args[0] instanceof FixtureImage?'original':'other'});};},set(object,key,value){object[key]=value;record(['set',key,value]);return true;}});}
-  toDataURL(){if(exportFailures){exportFailures--;throw Object.assign(new Error('Synthetic canvas export rejection'),{name:'SecurityError'});}return 'data:image/png;base64,iVBORw0KGgo=';}
+  toDataURL(type='image/png'){if(exportFailures){exportFailures--;throw Object.assign(new Error('Synthetic canvas export rejection'),{name:'SecurityError'});}return 'data:'+type+';base64,iVBORw0KGgo=';}
  }
  class FixtureImage extends Element{
   constructor(){super();this.naturalWidth=imageRaster.width;this.naturalHeight=imageRaster.height;this.complete=true;}
@@ -31,6 +31,7 @@ function fixture({deferInitialState=false,initialVisible=true,queuedAnimationFra
  const image='00000000-0000-4000-8000-000000000001',text1='00000000-0000-4000-8000-000000000002',text2='00000000-0000-4000-8000-000000000003',link='00000000-0000-4000-8000-000000000004';
  const base=(id,kind,createdAt,extra)=>({id,kind,createdAt,updatedAt:createdAt,name:'',title:'',text:'',url:'',pinned:false,folderIds:[],tags:[],trashedAt:null,hiddenFromShelf:false,...extra});
  const state={items:[base(image,'image',1000,{name:'Synthetic image',...(imageDocument?{annotations:[],crop:null}:{}),mediaUrl:'appmedia://media/'+image,originalMediaUrl:'appmedia://media/'+image+'/original'}),base(text1,'text',900,{text:'Text one'}),base(text2,'text',800,{text:'Text two'}),base(link,'link',700,{url:'https://example.com/reference',title:'Reference link'})],folders:[],settings:{visibleKinds:['image','text','link'],retentionDays:{image:30,text:30,link:30},shortcuts:{toggle:'Control+Alt+Space',search:'Control+Alt+S'},localShortcuts:{},language:'en',theme:'soft',cardSize:'medium'},view:'shelves',version:'1.7.0',windowVisible:initialVisible,canUndo:false,canUndoTrash:false,libraryRevision:0};
+ const outputConfig={info:{defaultFolder:'/home/u/Pictures',formats:['png','jpg','webp'],format:'png',apps:[{id:'org.kde.gwenview',name:'Gwenview'}],languages:[{code:'eng',name:'English'},{code:'tur',name:'Turkish'}],defaultLanguages:['eng','tur'],shareAvailable:false,codeAvailable:true},plan:{token:'tok-1',path:'/home/u/Pictures/a.png',format:'png',quality:90},write:{path:'/home/u/Pictures/a.png'},runResults:[]};
  let subscriber,removed=[],trashRemoved=[],cleanupFailures=0,editFailures=0,delayedReply=null,releaseInitialState,deferredImageBroadcast=null,pendingImageBroadcast=null;
  const clone=value=>structuredClone(value);
  const api={emit(patch){Object.assign(state,patch);subscriber?.(clone(state));},surface(patch){Object.assign(state,patch);subscriber?.({surfaceOnly:true,...clone(patch)});},state:async()=>{const initial=clone(state);if(deferInitialState)await new Promise(resolve=>{releaseInitialState=resolve;});return initial;},subscribe(fn){subscriber=fn;return()=>{};},async command(action,payload={}){commands.push({action,payload:clone(payload)});const selected=state.items.filter(item=>(payload.ids||[payload.id]).includes(item.id));
@@ -47,7 +48,7 @@ function fixture({deferInitialState=false,initialVisible=true,queuedAnimationFra
   if(action==='copy'&&!payload.keepOpen||action==='paste'||action==='hide')state.windowVisible=false;
   if(action==='show'){state.view='shelves';state.windowVisible=true;state.viewEvent={serial:String(commands.length)};}
   if(action==='library'||action==='settings'){state.view=action;state.windowVisible=true;}
-  const output=clone(state);if(trashResult)output.result=trashResult;if(cleanupError)output.result={error:cleanupError};
+  const output=clone(state);if(trashResult)output.result=trashResult;if(action==='outputInfo')output.result=clone(outputConfig.info);if(action==='outputPlan')output.result=clone(outputConfig.plan);if(action==='outputWrite')output.result=clone(outputConfig.write);if(action==='outputRun')output.result=outputConfig.runResults.length?outputConfig.runResults.shift():{};if(cleanupError)output.result={error:cleanupError};
   if(action==='saveImage'&&deferredImageBroadcast){const pending=deferredImageBroadcast;deferredImageBroadcast=null;pendingImageBroadcast=output;if(pending.surface)subscriber?.({surfaceOnly:true,windowVisible:true});}
   else subscriber?.(output);
   if(delayedReply?.action===action){const pending=delayedReply;delayedReply=null;await pending.promise;}
@@ -62,7 +63,7 @@ function fixture({deferInitialState=false,initialVisible=true,queuedAnimationFra
  async function dispatch(type,{canvas='capture-canvas',...extra}={}){const target=document.getElementById(canvas),event={target,preventDefault(){this.prevented=true;},...extra};for(const listener of listeners.get(type)||[])await listener(event);await ready();return event;}
  async function input(id,value){const target=document.getElementById(id);target.value=value;target.selectionStart=value.length;for(const listener of listeners.get('input')||[])await listener({target});await ready();}
  async function change(id,value){const target=document.getElementById(id);target.value=value;for(const listener of listeners.get('change')||[])await listener({target});await ready();}
- return{drawn,async cardClick(id,{ctrl=false}={}){const card=new Element();card.dataset.itemId=id;card.closest=selector=>selector==='[data-item-id]'?card:null;for(const listener of listeners.get('click')||[])await listener({target:card,ctrlKey:ctrl,metaKey:false,shiftKey:false,stopPropagation(){}});await ready();},grid(columns){document.querySelectorAll=selector=>selector==='.library-grid > .card'?[...document.getElementById('app').innerHTML.matchAll(/<article class="[^"]*"[^>]*data-item-id="([^"]+)"/g)].map((match,index)=>({offsetTop:Math.floor(index/columns)*200,dataset:{itemId:match[1]}})):[];},editor(id){const node=document.getElementById(id);node.tagName='INPUT';node.matches=selector=>selector.includes('input');return node;},ready,key,dispatch,input,change,click,pointer,async blur(){for(const listener of listeners.get('window:blur')||[])listener();await ready();},imageLoads,paintCalls,markupCalls,animationFrames,flushAnimationFrames(){for(const fn of animationFrames.splice(0))fn();},releaseInitialState(){releaseInitialState?.();},deferReply(action){let release;const promise=new Promise(resolve=>{release=resolve;});delayedReply={action,promise};return release;},deferImageBroadcast({surface=true}={}){deferredImageBroadcast={surface};},releaseImageBroadcast(){const next=pendingImageBroadcast;pendingImageBroadcast=null;if(next)subscriber?.(next);},failExportOnce(){exportFailures++;},failCleanupOnce(){cleanupFailures++;},failEditOnce(){editFailures++;},state,commands,nodes,image,text1,text2,link,api,get main(){return nodes.get('app').innerHTML;},get overlay(){return nodes.get('overlay-root').innerHTML;}};
+ return{drawn,outputConfig,get menu(){return nodes.get('output-menu-root')?.innerHTML||'';},async cardClick(id,{ctrl=false}={}){const card=new Element();card.dataset.itemId=id;card.closest=selector=>selector==='[data-item-id]'?card:null;for(const listener of listeners.get('click')||[])await listener({target:card,ctrlKey:ctrl,metaKey:false,shiftKey:false,stopPropagation(){}});await ready();},grid(columns){document.querySelectorAll=selector=>selector==='.library-grid > .card'?[...document.getElementById('app').innerHTML.matchAll(/<article class="[^"]*"[^>]*data-item-id="([^"]+)"/g)].map((match,index)=>({offsetTop:Math.floor(index/columns)*200,dataset:{itemId:match[1]}})):[];},editor(id){const node=document.getElementById(id);node.tagName='INPUT';node.matches=selector=>selector.includes('input');return node;},ready,key,dispatch,input,change,click,pointer,async blur(){for(const listener of listeners.get('window:blur')||[])listener();await ready();},imageLoads,paintCalls,markupCalls,animationFrames,flushAnimationFrames(){for(const fn of animationFrames.splice(0))fn();},releaseInitialState(){releaseInitialState?.();},deferReply(action){let release;const promise=new Promise(resolve=>{release=resolve;});delayedReply={action,promise};return release;},deferImageBroadcast({surface=true}={}){deferredImageBroadcast={surface};},releaseImageBroadcast(){const next=pendingImageBroadcast;pendingImageBroadcast=null;if(next)subscriber?.(next);},failExportOnce(){exportFailures++;},failCleanupOnce(){cleanupFailures++;},failEditOnce(){editFailures++;},state,commands,nodes,image,text1,text2,link,api,get main(){return nodes.get('app').innerHTML;},get overlay(){return nodes.get('overlay-root').innerHTML;}};
 }
 
 function selectedCards(f){return [...f.main.matchAll(/<article class="([^"]*)"[^>]*data-item-id="([^"]+)"/g)].filter(match=>match[1].split(' ').includes('selected')).map(match=>match[2]);}
@@ -1007,4 +1008,82 @@ test('capture Delete inside an editor field does nothing',async()=>{
  await f.key('KeyV');await capturePointer(f,'pointerdown',150,50);await capturePointer(f,'pointerup',150,50);
  for(const code of ['Delete','Backspace']){const event=await f.key(code,{target:f.editor('capture-stamp-number')});assert.ok(!event.prevented,code+' stays native in a field');assert.equal(captureDoc(f).annotations.length,1);}
  await f.key('Delete');assert.equal(captureDoc(f).annotations.length,0);
+});
+
+// ---- Output menu and Library output actions
+const outputCommands=f=>f.commands.filter(value=>value.action.startsWith('output')&&value.action!=='outputInfo');
+const outputRows=html=>[...html.matchAll(/data-output="([^"]+)"(?: data-app="([^"]*)")?(?: data-language="([^"]*)")?/g)].map(match=>({action:match[1],app:match[2],language:match[3]}));
+function fakeCard(id){const card={dataset:{itemId:id},closest:selector=>selector==='[data-item-id]'?card:null};return card;}
+
+test('image preview Export button opens the output menu with every action',async()=>{
+ const f=fixture();await f.ready();await f.key('Space');assert.match(f.overlay,/data-action="output-menu"/);await f.click('output-menu');
+ const rows=outputRows(f.menu).map(row=>row.action);
+ for(const action of ['save','saveAs','copyLocation','reveal','openWith','print','extractText','scanCode'])assert.ok(rows.includes(action),action);
+ assert.ok(!rows.includes('share'),'share hidden when unavailable');assert.match(f.menu,/role="menu"/);assert.match(f.menu,/data-app="org.kde.gwenview"/);assert.match(f.menu,/Gwenview/);
+ assert.deepEqual(outputRows(f.menu).filter(row=>row.action==='extractText').map(row=>row.language||''),['','eng','tur']);
+ f.outputConfig.info.shareAvailable=true;f.outputConfig.info.codeAvailable=false;await f.key('Escape');
+});
+
+test('output menu hides unavailable rows and shows Share when available',async()=>{
+ const f=fixture();f.outputConfig.info.shareAvailable=true;f.outputConfig.info.codeAvailable=false;await f.ready();await f.key('Space');await f.click('output-menu');
+ const rows=outputRows(f.menu).map(row=>row.action);assert.ok(rows.includes('share'));assert.ok(!rows.includes('scanCode'));
+});
+
+test('Ctrl+S on a focused image saves a PNG without encoding',async()=>{
+ const f=fixture();await f.ready();const event=await f.key('KeyS',{ctrl:true});assert.ok(event.prevented);
+ assert.deepEqual(outputCommands(f).map(value=>[value.action,value.payload]),[['outputPlan',{id:f.image,mode:'save'}],['outputWrite',{token:'tok-1'}]]);
+ await f.key('KeyS',{ctrl:true,shift:true});assert.deepEqual(outputCommands(f).at(-2).payload,{id:f.image,mode:'saveAs'});
+});
+
+test('Ctrl+S on a text item does nothing and a canceled plan writes nothing',async()=>{
+ const f=fixture();await f.ready();await f.key('ArrowDown');await f.key('KeyS',{ctrl:true});assert.equal(outputCommands(f).length,0);
+ await f.key('ArrowUp');f.outputConfig.plan={canceled:true};await f.key('KeyS',{ctrl:true,shift:true});assert.deepEqual(outputCommands(f).map(value=>value.action),['outputPlan']);
+});
+
+test('jpg plans send an encoded data URL with the plan token',async()=>{
+ const f=fixture();f.outputConfig.plan={token:'tok-jpg',path:'/home/u/Pictures/a.jpg',format:'jpg',quality:80};await f.ready();await f.key('KeyS',{ctrl:true});
+ const write=outputCommands(f).find(value=>value.action==='outputWrite');assert.equal(write.payload.token,'tok-jpg');assert.match(write.payload.dataUrl,/^data:image\/jpeg/);
+ f.outputConfig.plan={token:'tok-webp',path:'/x.webp',format:'webp',quality:70};await f.key('KeyS',{ctrl:true});assert.match(outputCommands(f).at(-1).payload.dataUrl,/^data:image\/webp/);
+});
+
+test('copy location saves first when main asks',async()=>{
+ const f=fixture();f.outputConfig.runResults=[{needsSave:true},{copied:true}];await f.ready();await f.key('Space');await f.click('output-menu');await f.click('output-run',{output:'copyLocation'});
+ assert.deepEqual(outputCommands(f).map(value=>value.action),['outputRun','outputPlan','outputWrite','outputRun']);assert.equal(outputCommands(f)[0].payload.action,'copyLocation');assert.equal(outputCommands(f)[3].payload.id,f.image);assert.equal(f.menu,'');
+});
+
+test('menu rows send app and a single OCR language to outputRun',async()=>{
+ const f=fixture();await f.ready();await f.key('Space');await f.click('output-menu');await f.click('output-run',{output:'openWith',app:'org.kde.gwenview'});
+ assert.deepEqual(outputCommands(f)[0].payload,{id:f.image,action:'openWith',app:'org.kde.gwenview'});
+ await f.click('output-menu');await f.click('output-run',{output:'extractText',language:'tur'});assert.deepEqual(outputCommands(f)[1].payload,{id:f.image,action:'extractText',languages:['tur']});
+ await f.click('output-menu');await f.click('output-run',{output:'extractText'});assert.deepEqual(outputCommands(f)[2].payload,{id:f.image,action:'extractText'});
+});
+
+test('right-click on an image card opens the output menu; on a text card it does not',async()=>{
+ const f=fixture();await f.ready();const image=await f.dispatch('contextmenu',{target:fakeCard(f.image),clientX:30,clientY:40});assert.ok(image.prevented);assert.match(f.menu,/data-output="save"/);
+ await f.key('Escape');assert.equal(f.menu,'');const text=await f.dispatch('contextmenu',{target:fakeCard(f.text1),clientX:30,clientY:40});assert.ok(!text.prevented);assert.equal(f.menu,'');
+ f.state.items.find(value=>value.id===f.image).trashedAt=1;f.api.emit({items:f.state.items});await f.ready();await f.dispatch('contextmenu',{target:fakeCard(f.image)});assert.equal(f.menu,'');
+});
+
+test('output menu keyboard: ArrowDown + Enter runs the second action, Escape closes',async()=>{
+ const f=fixture();await f.ready();await f.key('KeyE',{ctrl:true});assert.match(f.menu,/data-output="save"/);
+ await f.key('ArrowDown');await f.key('Enter');assert.equal(f.menu,'');assert.equal(outputCommands(f)[0].payload.mode,'saveAs');
+ await f.key('Space');await f.key('KeyE',{ctrl:true});assert.match(f.menu,/role="menu"/);await f.key('Escape');assert.equal(f.menu,'');assert.match(f.overlay,/id="preview-dialog"/,'Escape closes only the menu');
+ await f.key('KeyE',{ctrl:true});await f.key('ArrowUp');await f.key('Enter');assert.ok(outputCommands(f).length>1);
+});
+
+test('output shortcuts never fire in image markup; Ctrl+S there still saves markup',async()=>{
+ const f=fixture({imageDocument:true});await f.ready();await f.key('Space');await f.key('KeyM');await f.ready();
+ await f.key('KeyS',{ctrl:true,shift:true});await f.key('KeyE',{ctrl:true});assert.equal(outputCommands(f).length,0);assert.equal(f.menu,'');
+ await f.key('KeyS',{ctrl:true});assert.equal(outputCommands(f).length,0);assert.match(f.overlay,/id="markup-canvas"/,'Ctrl+S stays with the markup editor');
+});
+
+test('Actions palette lists output entries and disables them for text',async()=>{
+ const f=fixture();await f.ready();await f.key('KeyK',{ctrl:true});assert.match(f.overlay,/data-command="output-copyLocation"/);assert.match(f.overlay,/data-command="output-scanCode"/);assert.match(f.overlay,/data-command="output-save"/);
+ await f.key('Escape');await f.key('ArrowDown');await f.key('KeyK',{ctrl:true});assert.match(f.overlay,/data-command="output-print"[^>]*disabled/);assert.match(f.overlay,/Select a still image first\./);
+});
+
+test('Turkish UI shows Turkish output labels',async()=>{
+ const f=fixture();f.api.emit({settings:{...f.state.settings,language:'tr'}});await f.ready();await f.key('Space');await f.click('output-menu');
+ for(const label of ['Farklı kaydet…','Konumu kopyala','QR kodu tara','İçeren klasörü aç','Birlikte aç','Yazdır','Metni çıkar · Turkish'])assert.ok(f.menu.includes(label),label);
+ assert.match(f.overlay,/Dışa aktar/);
 });
