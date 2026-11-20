@@ -31,7 +31,8 @@ const {ImageSearch,modelPaths}=require('./lib/image-search.cjs');
 const {StatusTray,trayIcon,translated}=require('./lib/status-summary.cjs');
 const {WindowBounds}=require('./lib/window-bounds.cjs');
 const {MotionBridge}=require('./lib/shelf-motion.cjs');
-const {OutputActions,prepareOcrLanguages,createAnnouncer,printWithWindow}=require('./lib/output-actions.cjs');
+const {OutputActions,prepareOcrLanguages,createAnnouncer,printWithWindow,outputText,describeError}=require('./lib/output-actions.cjs');
+const OUTPUT_COMMANDS=new Set(['outputInfo','outputPlan','outputWrite','outputRun','outputFailed']);
 const BUILD_NUMBER=Number(require('./package.json').clipboardLineBuild)||63;
 const testMode = process.argv.includes('--test-mode');
 const testFolder = process.argv.find(value=>value.startsWith('--test-data='))?.slice('--test-data='.length);
@@ -91,6 +92,8 @@ function broadcast({surfaceOnly=false}={}) {
 }
 function notify(text) { message=text;broadcast(); }
 // Output-action feedback: toast while the window is up, desktop notification while hidden.
+// Output-action texts follow the UI language (settings.language, or the system locale).
+function outputLanguage(){const value=store?.data?.settings?.language||'system';return /^tr/i.test(value==='system'?app.getLocale():value)?'tr':'en';}
 const announce=createAnnouncer({visible:()=>desiredVisible&&!!window?.isVisible(),toast:notify,Notification,testMode,reveal:file=>shell.showItemInFolder(file)});
 function openUpdates(){return show('settings',{settingsTab:'updates'});}
 function refreshTray(){
@@ -519,7 +522,7 @@ async function recognize(id,quiet=false,languages=INDEX_LANGUAGES) {
   const languageDirectory=path.join(store.directory,'ocr-models');
   await prepareOcrLanguages({languages,directory:languageDirectory,available:()=>output.installedLanguages()});
   const worker=await createWorker(languages,1,{langPath:languageDirectory,cachePath:languageDirectory,gzip:true});
-  try{let image=nativeImage.createFromPath(file);const size=image.getSize(),scale=Math.min(1,2400/Math.max(size.width,size.height));if(scale<1)image=image.resize({width:Math.round(size.width*scale),height:Math.round(size.height*scale)});const result=await worker.recognize(image.toPNG());if(!store.data.items.includes(item)||(item.renderedFile||item.imageFile)!==fingerprint)throw new Error('Image changed during recognition');const text=String(result.data.text||'').slice(0,1024*1024);if(!cacheable)return{text,id};item.ocrText=text;store.persist();if(!quiet)notify(item.ocrText?'Image text ready':'No text found');else broadcast();return{text:item.ocrText,id};}
+  try{let image=nativeImage.createFromPath(file);const size=image.getSize(),scale=Math.min(1,2400/Math.max(size.width,size.height));if(scale<1)image=image.resize({width:Math.round(size.width*scale),height:Math.round(size.height*scale)});const result=await worker.recognize(image.toPNG());if(!store.data.items.includes(item)||(item.renderedFile||item.imageFile)!==fingerprint)throw new Error(outputText(outputLanguage(),'imageChanged'));const text=String(result.data.text||'').slice(0,1024*1024);if(!cacheable)return{text,id};item.ocrText=text;store.persist();if(!quiet)notify(item.ocrText?'Image text ready':'No text found');else broadcast();return{text:item.ocrText,id};}
   finally{await worker.terminate();}
 }
 function configureWatchers() {
@@ -596,7 +599,7 @@ async function command(action,payload={}) {
   else if(action==='openLink'){const item=store.item(payload.id);const url=plainURL(item.url);if(item.kind!=='link'||!url)throw new Error('Link unavailable');await shell.openExternal(url);}
   else if(action==='openFile'||action==='revealFile'){
     const item=store.item(payload.id);if(item.kind!=='image')throw new Error('Select an image first.');
-    const file=store.mediaPath(item.id);if(action==='revealFile')shell.showItemInFolder(await output.savedFile(item.id)||file);else {const failure=await shell.openPath(file);if(failure)throw new Error('The image could not be opened.');}
+    const file=store.mediaPath(item.id);if(action==='revealFile')shell.showItemInFolder(await output.savedFile(item.id)||file);else {const failure=await shell.openPath(file);if(failure)throw new Error(outputText(outputLanguage(),'imageOpenFailed'));}
   }
   else if(action==='refreshLink'){
     const item=store.item(payload.id);if(item.kind!=='link')throw new Error('Select a link first.');
@@ -643,7 +646,7 @@ async function command(action,payload={}) {
       }else item=store.insert('image',finalBuffer);
       if(copyToClipboard)store.markCopied([item.id]);
       queueOCR(item.id);refreshImageSearch();
-    }catch(error){notify((copyToClipboard?'Screenshot copied, but it':'The screenshot')+' could not be saved to the Library: '+(error?.message||error));}
+    }catch(error){announce(outputText(outputLanguage(),copyToClipboard?'libraryFailedCopied':'libraryFailed',describeError(outputLanguage(),error)));}
     result={id:item?.id??null};
   }
   else if(action==='cancelCapture'){
@@ -655,10 +658,8 @@ async function command(action,payload={}) {
   else if(action==='import'){const response=await dialog.showOpenDialog(window,{properties:['openFile','multiSelections'],filters:[{name:'Images, recordings and text',extensions:['png','jpg','jpeg','webp','bmp','mov','mp4','txt','md']}]});const imported=[];for(const file of response.filePaths){const item=await importFile(file);imported.push(item.id);if(item.kind==='link')void enrich(item.id);}result={ids:imported};}
   else if(action==='searchImages'){if(!imageSearch)throw new Error('Offline image search is unavailable.');result=await imageSearch.search(payload.query,payload.eligibleIds);}
   else if(action==='ocr')result=await ocr(payload.id);
-  else if(action==='outputInfo')result=await output.info();
-  else if(action==='outputPlan')result=await output.plan(payload.id,payload.mode);
-  else if(action==='outputWrite'){if(typeof payload.token!=='string')throw new Error('Invalid save token');result=await output.write(payload.token,payload.dataUrl??null);}
-  else if(action==='outputRun')result=await output.run({id:payload.id,action:payload.action,app:payload.app,languages:payload.languages});
+  // Failures are announced inside handle (notification while hidden, toast while visible).
+  else if(OUTPUT_COMMANDS.has(action))result=await output.handle(action,payload);
   else if(action==='copyOCR'){const recognized=await ocr(payload.id);if(!recognized.text.trim())throw new Error('No text found in this image.');await writeClipboard([{kind:'text',text:recognized.text}]);result=recognized;notify('Recognized text copied');}
   else if(action==='export'){
     const selected=store.selected(ids(payload.ids));if(!selected.length)throw new Error('Select an item first');
@@ -710,7 +711,7 @@ else app.whenReady().then(async()=>{
   store=new Store(app.getPath('userData'));
   output=new OutputActions({store,settings:()=>store.data.settings,home:require('node:os').homedir(),configHome:process.env.XDG_CONFIG_HOME||path.join(require('node:os').homedir(),'.config'),
     runtimeDir:process.env.XDG_RUNTIME_DIR,assetsDir:path.join(__dirname,'assets'),ocrBundledDir:bundledOcrDirectory(),
-    language:()=>{const value=store.data.settings.language||'system';return /^tr/i.test(value==='system'?app.getLocale():value)?'tr':'en';},
+    language:outputLanguage,
     dialog:{showSaveDialog:options=>desiredVisible&&window?.isVisible()?dialog.showSaveDialog(window,options):dialog.showSaveDialog(options)},
     writeText:text=>writeMarkedClipboard({'text/plain':new Blob([text],{type:'text/plain'})}),
     reveal:file=>shell.showItemInFolder(file),notify:announce,
@@ -752,7 +753,7 @@ else app.whenReady().then(async()=>{
   window.webContents.on('did-finish-load',()=>{lastBroadcastLibraryRevision=-1;});
   ipcMain.handle('clipboardline:state',event=>{trusted(event);return state();});
   ipcMain.on('clipboardline:shelf-motion-finished',(event,value)=>{trusted(event);shelfMotion.acknowledge(value);});
-  ipcMain.handle('clipboardline:command',async(event,action,payload)=>{trusted(event);try{return await command(action,payload);}catch(error){notify(error.message);return state({error:error.message});}});
+  ipcMain.handle('clipboardline:command',async(event,action,payload)=>{trusted(event);try{return await command(action,payload);}catch(error){if(!error?.announced)notify(error.message);return state({error:error.message});}});
   window.on('blur',()=>{if(shortcutRecording){finishShortcutRecording();broadcast({surfaceOnly:true});}});
   window.on('hide',()=>finishShortcutRecording());
   window.webContents.on('render-process-gone',()=>finishShortcutRecording());

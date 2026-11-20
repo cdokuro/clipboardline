@@ -165,3 +165,8 @@ test('setSavedPath persists and is public',()=>fixture((s,time,dir)=>{
   assert.throws(()=>s.setSavedPath('00000000-0000-4000-8000-000000000099','/tmp/y.png'));
   assert.equal(item.savedPath,'/tmp/x.png');
 }));
+test('an image edit forgets the saved file of the old version',()=>fixture(s=>{
+  const item=s.insert('image',png);s.setSavedPath(item.id,'/tmp/x.png');
+  s.modify('saveImage',{id:item.id,dataUrl:'data:image/png;base64,'+png.toString('base64')});
+  assert.equal(item.savedPath,'');assert.equal(s.publicState().items[0].savedPath,'');
+}));

@@ -16,9 +16,9 @@ const FORMATS = {
   jpg: { extension: '.jpg', mime: 'image/jpeg' },
   webp: { extension: '.webp', mime: 'image/webp' },
 };
-const TOKEN_LIFETIME = 120_000, OWN_LIFETIME = 30_000, APPS_LIFETIME = 60_000, PREVIEW = 80, MAX_LANGUAGES = 16, TEMP_MAX_AGE = 3_600_000, MAX_NAME = 200, MAX_ATTEMPTS = 10000, MAX_DATA_URL = 90_000_000;
+const TOKEN_LIFETIME = 120_000, OWN_LIFETIME = 30_000, APPS_LIFETIME = 60_000, PREVIEW = 80, MAX_LANGUAGES = 16, TEMP_MAX_AGE = 3_600_000, MAX_NAME = 200, MAX_ATTEMPTS = 10000, MAX_DATA_URL = 90_000_000, MAX_FAILURE = 300;
 
-function fail(message) { throw new Error(message); }
+function fail(message, extra) { throw Object.assign(new Error(message), extra); }
 
 function formatFromExtension(extension) {
   const value = String(extension || '').toLowerCase().replace(/^\./, '');
@@ -58,7 +58,7 @@ async function uniqueOutputPath(folder, template, date, { title = '', extension 
     const file = path.join(folder, name + extension);
     if (!(await taken(file))) return file;
   }
-  return fail('A free filename could not be found');
+  return fail('A free filename could not be found', { code: 'ENONAME' });
 }
 
 async function defaultSaveFolder({ home, configHome, readFile = file => nodeFs.promises.readFile(file, 'utf8') } = {}) {
@@ -92,12 +92,58 @@ const TEXT = {
   codeBinary: ['Code found with binary content', 'İkili içerikli kod bulundu'],
   noCode: ['No QR code or barcode found', 'QR kod veya barkod bulunamadı'],
   saveFailed: ['The image could not be saved: %1', 'Görsel kaydedilemedi: %1'],
+  actionFailed: ['The action failed: %1', 'İşlem başarısız oldu: %1'],
+  libraryFailed: ['The screenshot could not be saved to the Library: %1', 'Ekran görüntüsü Kütüphane’ye kaydedilemedi: %1'],
+  libraryFailedCopied: ['Screenshot copied, but it could not be saved to the Library: %1', 'Ekran görüntüsü kopyalandı ancak Kütüphane’ye kaydedilemedi: %1'],
+  imagesOnly: ['Only images can be saved', 'Yalnızca görseller kaydedilebilir'],
+  invalidMode: ['Invalid save mode', 'Geçersiz kaydetme kipi'],
+  invalidSavePath: ['Invalid save path', 'Geçersiz kayıt yolu'],
+  tokenUnknown: ['Unknown or used save token', 'Bilinmeyen veya kullanılmış kayıt belirteci'],
+  tokenExpired: ['The save token expired; try again', 'Kayıt belirtecinin süresi doldu; tekrar dene'],
+  invalidImageData: ['Invalid image data', 'Geçersiz görsel verisi'],
+  formatMismatch: ['The image data does not match the format', 'Görsel verisi biçimle eşleşmiyor'],
+  noFreeName: ['A free filename could not be found', 'Boş bir dosya adı bulunamadı'],
+  tempNotPrivate: ['The temporary folder is not private', 'Geçici klasör yalnızca sana ait değil'],
+  tempFailed: ['A temporary filename could not be created', 'Geçici dosya adı oluşturulamadı'],
+  appUnavailable: ['This application is not available for images', 'Bu uygulama görseller için kullanılamıyor'],
+  printUnavailable: ['Printing is unavailable', 'Yazdırma kullanılamıyor'],
+  printFailed: ['Printing failed: %1', 'Yazdırma başarısız oldu: %1'],
+  printTimedOut: ['Printing timed out', 'Yazdırma zaman aşımına uğradı'],
+  shareUnavailable: ['Sharing is unavailable', 'Paylaşım kullanılamıyor'],
+  ocrUnavailable: ['Text recognition is unavailable', 'Metin tanıma kullanılamıyor'],
+  noOcrLanguage: ['No OCR language is installed', 'Kurulu OCR dili yok'],
+  ocrLanguageMissing: ['OCR language is not installed: %1', 'OCR dili kurulu değil: %1'],
+  invalidOcrLanguages: ['Invalid OCR languages', 'Geçersiz OCR dilleri'],
+  scanFailed: ['The QR code scan failed: %1', 'QR kod taraması başarısız oldu: %1'],
+  timedOut: ['timed out', 'zaman aşımı'],
+  zbarMissing: ['QR code scanning needs zbarimg (zbar) to be installed', 'QR kod taraması için zbarimg (zbar) kurulmalı'],
+  unknownAction: ['Unknown output action', 'Bilinmeyen çıktı işlemi'],
+  imageChanged: ['Image changed during recognition', 'Görsel, tanıma sırasında değişti'],
+  imageOpenFailed: ['The image could not be opened.', 'Görsel açılamadı.'],
+  toolMissing: ['%1 is not installed', '%1 kurulu değil'],
+  fileExists: ['A file with this name already exists', 'Bu adda bir dosya zaten var'],
+  permissionDenied: ['Permission denied', 'İzin reddedildi'],
+  diskFull: ['No space left on the disk', 'Diskte yer kalmadı'],
+  readOnly: ['The folder is read-only', 'Klasör salt okunur'],
+  notFound: ['The file or folder does not exist', 'Dosya veya klasör yok'],
+  notFolder: ['The path is not a folder', 'Yol bir klasör değil'],
 };
 function outputText(language, key, ...values) {
   const entry = TEXT[key]; if (!entry) return String(key);
   let turkish = language === 'tr';
   if (language === 'system') turkish = /^tr/i.test(process.env.LC_ALL || process.env.LC_MESSAGES || process.env.LANG || '');
   return entry[turkish ? 1 : 0].replace(/%(\d)/g, (_m, n) => String(values[Number(n) - 1] ?? ''));
+}
+
+const ERROR_KEYS = { EEXIST: 'fileExists', EACCES: 'permissionDenied', EPERM: 'permissionDenied', ENOSPC: 'diskFull', EDQUOT: 'diskFull', EROFS: 'readOnly', ENOENT: 'notFound', ENOTDIR: 'notFolder', ENONAME: 'noFreeName' };
+// User-facing text for an error: system error codes and our coded errors are translated; others keep their (already translated) message.
+function describeError(language, error) {
+  const code = error?.code;
+  if (code === 'EPRINT') return error.reason === 'timeout' ? outputText(language, 'printTimedOut') : outputText(language, 'printFailed', error.reason || '?');
+  if (code === 'ENOLANG') return outputText(language, 'ocrLanguageMissing', error.language);
+  if (code === 'ENOENT' && /^spawn/.test(String(error.syscall || ''))) return outputText(language, 'toolMissing', path.basename(String(error.path || '?')));
+  if (typeof code === 'string' && ERROR_KEYS[code]) return outputText(language, ERROR_KEYS[code]);
+  return String(error?.message || error);
 }
 
 const LANGUAGE_CODE = /^[a-z0-9_]{1,32}$/i;
@@ -115,7 +161,7 @@ async function prepareOcrLanguages({ languages, directory, available, fs = nodeF
     if (await exists(fs, destination)) continue;
     installed ??= await available();
     const entry = installed.find(language => language.code === code);
-    if (!entry) fail('OCR language is not installed: ' + code);
+    if (!entry) fail('OCR language is not installed: ' + code, { code: 'ENOLANG', language: code });
     const temporary = destination + '.' + crypto.randomBytes(4).toString('hex') + '.tmp';
     try {
       if (entry.source === 'system') await pipeline(nodeFs.createReadStream(entry.file), zlib.createGzip(), nodeFs.createWriteStream(temporary, { flags: 'wx' }));
@@ -125,14 +171,27 @@ async function prepareOcrLanguages({ languages, directory, available, fs = nodeF
   }
 }
 
+const NOTICE_LIFETIME = 60_000;
 // Visible window → in-app toast; hidden → silent desktop notification whose click reveals the file.
-function createAnnouncer({ visible, toast, Notification, testMode, reveal }) {
-  return (text, { file } = {}) => {
+// Shown notifications are kept in `live` so they are not garbage-collected (which would drop the
+// click handler) until they are clicked, closed or failed, or NOTICE_LIFETIME passes.
+function createAnnouncer({ visible, toast, Notification, testMode, reveal, setTimer = setTimeout, clearTimer = clearTimeout }) {
+  const live = new Set();
+  const announce = (text, { file } = {}) => {
     if (visible() || testMode || !Notification?.isSupported?.()) return toast(text);
     const notice = new Notification({ title: 'ClipBoardLine', body: text, silent: true });
-    if (file) notice.on('click', () => { try { reveal(file); } catch { /* ignore */ } });
+    let timer = null;
+    const release = () => { if (!live.delete(notice)) return; if (timer) clearTimer(timer); };
+    live.add(notice);
+    timer = setTimer(release, NOTICE_LIFETIME);
+    timer?.unref?.();
+    notice.on('click', () => { release(); if (file) { try { reveal(file); } catch { /* ignore */ } } });
+    notice.on('close', release);
+    notice.on('failed', release);
     notice.show();
   };
+  announce.live = live;
+  return announce;
 }
 
 const escapeHtml = value => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -145,21 +204,26 @@ function printPage(file) {
 
 // Prints `file` through a hidden, sandboxed, script-free window and the system print dialog.
 // The HTML page is left in `directory` for the temp folder's age-based cleanup.
-async function printWithWindow(file, { BrowserWindow, directory, fs = nodeFs.promises }) {
+const PRINT_TIMEOUT = 600_000;
+async function printWithWindow(file, { BrowserWindow, directory, fs = nodeFs.promises, timeout = PRINT_TIMEOUT }) {
   const page = path.join(directory, path.basename(file, path.extname(file)) + '-' + crypto.randomBytes(3).toString('hex') + '.html');
   await fs.writeFile(page, printPage(file), { flag: 'wx', mode: 0o600 });
   const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, javascript: false } });
   const destroy = () => { try { if (!win.isDestroyed()) win.destroy(); } catch { /* ignore */ } };
   try { await win.loadFile(page); } catch (error) { destroy(); throw error; }
   return new Promise((resolve, reject) => {
+    let done = false;
+    const finish = (settle, value) => { if (done) return; done = true; clearTimeout(timer); destroy(); settle(value); };
+    // A print dialog that never answers must not keep the hidden window forever.
+    const timer = setTimeout(() => finish(reject, Object.assign(new Error('Printing timed out'), { code: 'EPRINT', reason: 'timeout' })), timeout);
+    timer.unref?.();
     try {
       win.webContents.print({ silent: false, printBackground: true }, (success, reason) => {
-        destroy();
-        if (success) resolve({ printed: true });
-        else if (reason === 'cancelled') resolve({ printed: false });
-        else reject(new Error('Printing failed' + (reason ? ': ' + reason : '')));
+        if (success) finish(resolve, { printed: true });
+        else if (reason === 'cancelled') finish(resolve, { printed: false });
+        else finish(reject, Object.assign(new Error('Printing failed' + (reason ? ': ' + reason : '')), { code: 'EPRINT', reason: reason || '' }));
       });
-    } catch (error) { destroy(); reject(error); }
+    } catch (error) { finish(reject, error); }
   });
 }
 
@@ -183,17 +247,22 @@ class OutputActions {
 
   imageItem(id) {
     const item = this.store.item(id);
-    if (item.kind !== 'image' || item.recording) fail('Only images can be saved');
+    if (item.kind !== 'image' || item.recording) fail(this.say('imagesOnly'));
     return item;
   }
 
   async plan(id, mode) {
-    if (mode !== 'save' && mode !== 'saveAs') fail('Invalid save mode');
+    if (mode !== 'save' && mode !== 'saveAs') fail(this.say('invalidMode'));
     const item = this.imageItem(id), output = this.settings().output;
     let format = output.format;
     if (!FORMATS[format]) format = 'png';
+    const time = this.time();
+    for (const [key, entry] of this.tokens) if (entry.expires < time) this.tokens.delete(key);
+    // A path promised to a pending (unexpired) plan is taken, even though nothing is written there yet.
+    const held = new Set([...this.tokens.values()].map(entry => path.resolve(entry.path)));
+    const exists = async file => held.has(path.resolve(file)) || (async () => { try { await this.fs.access(file); return true; } catch { return false; } })();
     const folder = output.saveFolder || await defaultSaveFolder({ home: this.home, configHome: this.configHome });
-    const planned = await uniqueOutputPath(folder, output.filenameTemplate, this.now(), { title: item.name || item.title || '', extension: FORMATS[format].extension });
+    const planned = await uniqueOutputPath(folder, output.filenameTemplate, this.now(), { title: item.name || item.title || '', extension: FORMATS[format].extension, exists });
     let file = planned, confirmed = false;
     if (mode === 'saveAs') {
       const result = await this.dialog.showSaveDialog({
@@ -202,7 +271,7 @@ class OutputActions {
       });
       if (!result || result.canceled || !result.filePath) return { canceled: true };
       file = result.filePath;
-      if (typeof file !== 'string' || !path.isAbsolute(file)) fail('Invalid save path');
+      if (typeof file !== 'string' || !path.isAbsolute(file)) fail(this.say('invalidSavePath'));
       const chosen = formatFromExtension(path.extname(file));
       // Only the exact path the user confirmed in the dialog may be overwritten.
       if (chosen) { format = chosen; confirmed = true; } else file += FORMATS[format].extension;
@@ -215,8 +284,8 @@ class OutputActions {
   async write(token, dataUrl = null) {
     const plan = this.tokens.get(token);
     this.tokens.delete(token);
-    if (!plan) fail('Unknown or used save token');
-    if (this.time() > plan.expires) fail('The save token expired');
+    if (!plan) fail(this.say('tokenUnknown'));
+    if (this.time() > plan.expires) fail(this.say('tokenExpired'));
     await this.fs.mkdir(path.dirname(plan.path), { recursive: true });
     // Owned before the first byte lands, so a watched folder never imports this file.
     const resolved = path.resolve(plan.path);
@@ -234,11 +303,11 @@ class OutputActions {
       await this.fs.copyFile(this.store.mediaPath(plan.id), plan.path, plan.confirmed ? 0 : constants.COPYFILE_EXCL);
     } else {
       const mime = FORMATS[plan.format].mime, prefix = `data:${mime};base64,`;
-      if (typeof dataUrl !== 'string' || !dataUrl.startsWith(prefix) || dataUrl.length > MAX_DATA_URL) fail('Invalid image data');
+      if (typeof dataUrl !== 'string' || !dataUrl.startsWith(prefix) || dataUrl.length > MAX_DATA_URL) fail(this.say('invalidImageData'));
       const body = dataUrl.slice(prefix.length);
-      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(body)) fail('Invalid image data');
+      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(body)) fail(this.say('invalidImageData'));
       const bytes = Buffer.from(body, 'base64');
-      if (!matchesFormat(bytes, plan.format)) fail('The image data does not match the format');
+      if (!matchesFormat(bytes, plan.format)) fail(this.say('formatMismatch'));
       await this.fs.writeFile(plan.path, bytes, { flag: plan.confirmed ? 'w' : 'wx', mode: 0o644 });
     }
   }
@@ -274,7 +343,7 @@ class OutputActions {
     const item = this.imageItem(id), saved = await this.savedFile(id);
     await this.fs.mkdir(this.tempDirectory, { recursive: true, mode: 0o700 });
     const info = await this.fs.lstat(this.tempDirectory);
-    if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid() || (info.mode & 0o077) !== 0) fail('The temporary folder is not private');
+    if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid() || (info.mode & 0o077) !== 0) fail(this.say('tempNotPrivate'));
     try {
       const cutoff = Date.now() - TEMP_MAX_AGE; // file mtimes are wall-clock, not the injected clock
       for (const name of await this.fs.readdir(this.tempDirectory)) {
@@ -290,7 +359,7 @@ class OutputActions {
       try { await this.fs.writeFile(file, bytes, { flag: 'wx', mode: 0o600 }); return file; } // O_EXCL: never follows or replaces an existing entry
       catch (error) { if (error.code !== 'EEXIST') throw error; }
     }
-    fail('A temporary filename could not be created');
+    fail(this.say('tempFailed'));
   }
 
   suffix() { return crypto.randomBytes(3).toString('hex'); }
@@ -343,7 +412,7 @@ class OutputActions {
   async openWith(id, appId) {
     this.imageItem(id);
     const entry = typeof appId === 'string' ? (await this.apps()).find(candidate => candidate.id === appId) : null;
-    if (!entry) fail('This application is not available for images');
+    if (!entry) fail(this.say('appUnavailable'));
     const file = await this.externalFile(id);
     const { command, args } = (this.integration.launchCommand || desktopIntegration.launchCommand)(entry.file, file);
     await this.launch(command, args);
@@ -351,16 +420,19 @@ class OutputActions {
   }
 
   async printImage(id) {
-    if (typeof this.print !== 'function') fail('Printing is unavailable');
+    if (typeof this.print !== 'function') fail(this.say('printUnavailable'));
     this.imageItem(id);
-    return this.print(await this.externalFile(id));
+    const file = await this.externalFile(id);
+    try { return await this.print(file); } catch (error) { if (error?.code === 'EPRINT') fail(describeError(this.language(), error)); throw error; }
   }
 
   async share(id) {
     this.imageItem(id);
-    if (!(await this.shareAvailable())) fail('Sharing is unavailable');
+    if (!(await this.shareAvailable())) fail(this.say('shareUnavailable'));
     const file = await this.externalFile(id);
-    await this.launch('qml6', [path.join(this.assetsDir, 'share.qml'), '--', file]);
+    // The saved file may be a JPEG or WebP; Purpose needs its real MIME type.
+    const mime = FORMATS[formatFromExtension(path.extname(file))]?.mime || FORMATS.png.mime;
+    await this.launch('qml6', [path.join(this.assetsDir, 'share.qml'), '--', mime, file]);
     return { path: file };
   }
 
@@ -368,17 +440,17 @@ class OutputActions {
     const installed = new Set((await this.installedLanguages()).map(entry => entry.code));
     if (requested === undefined) {
       const list = this.settings().output.ocrLanguages.filter(code => installed.has(code));
-      if (!list.length) fail('No OCR language is installed');
+      if (!list.length) fail(this.say('noOcrLanguage'));
       return list;
     }
     if (!Array.isArray(requested) || requested.length < 1 || requested.length > MAX_LANGUAGES
-      || requested.some(code => typeof code !== 'string' || !LANGUAGE_CODE.test(code) || !installed.has(code))) fail('Invalid OCR languages');
+      || requested.some(code => typeof code !== 'string' || !LANGUAGE_CODE.test(code) || !installed.has(code))) fail(this.say('invalidOcrLanguages'));
     return [...new Set(requested)];
   }
 
   async extractText(id, languages) {
     this.imageItem(id);
-    if (typeof this.ocr !== 'function') fail('Text recognition is unavailable');
+    if (typeof this.ocr !== 'function') fail(this.say('ocrUnavailable'));
     const list = await this.ocrLanguageList(languages);
     const text = String((await this.ocr(id, list))?.text || '');
     if (!text.trim()) { this.tell(this.say('noText')); return { text: '' }; }
@@ -393,10 +465,10 @@ class OutputActions {
     let scanned;
     try { scanned = await this.integration.scanCodes(file, { env: this.env }); }
     catch (error) {
-      const reason = error?.killed || error?.signal ? 'timed out' : String(error?.message || error).split('\n')[0].slice(0, 120);
-      fail('The QR code scan failed: ' + reason);
+      const reason = error?.killed || error?.signal ? this.say('timedOut') : String(error?.message || error).split('\n')[0].slice(0, 120);
+      fail(this.say('scanFailed', reason));
     }
-    if (!scanned.available) fail('QR code scanning needs zbarimg (zbar) to be installed');
+    if (!scanned.available) fail(this.say('zbarMissing'));
     const codes = scanned.codes || [], texts = codes.filter(code => !code.binary && typeof code.text === 'string');
     if (texts.length) {
       const first = texts[0].text, flat = first.replace(/\s+/g, ' ').trim();
@@ -410,7 +482,7 @@ class OutputActions {
   // Single entry for the renderer's outputRun command; every argument is validated here.
   async run({ id, action, app, languages } = {}) {
     this.store.item(id);
-    if (!RUN_ACTIONS.has(action)) fail('Unknown output action');
+    if (!RUN_ACTIONS.has(action)) fail(this.say('unknownAction'));
     if (action === 'copyLocation') return this.copyLocation(id);
     if (action === 'reveal') return this.revealSaved(id);
     if (action === 'openWith') return this.openWith(id, app);
@@ -420,9 +492,37 @@ class OutputActions {
     return this.scanCode(id);
   }
 
+  // Entry for main's output commands. Failures are announced here (desktop notification while the
+  // window is hidden, e.g. after a capture output action; toast otherwise) and rethrown with
+  // `announced` set and the announced text as message, so main does not toast them again.
+  async handle(action, payload = {}) {
+    payload = payload && typeof payload === 'object' ? payload : {};
+    if (action === 'outputInfo') return this.info();
+    if (action === 'outputFailed') {
+      const message = payload.message;
+      if (typeof message !== 'string' || !message.trim() || message.length > MAX_FAILURE) fail('Invalid failure message');
+      if (typeof payload.token === 'string') this.tokens.delete(payload.token); // the abandoned plan no longer holds its path
+      this.tell(this.say('saveFailed', message.trim()));
+      return { announced: true };
+    }
+    if (!['outputPlan', 'outputWrite', 'outputRun'].includes(action)) fail('Unknown output command');
+    try {
+      if (action === 'outputPlan') return await this.plan(payload.id, payload.mode);
+      if (action === 'outputWrite') {
+        if (typeof payload.token !== 'string') fail(this.say('tokenUnknown'));
+        return await this.write(payload.token, payload.dataUrl ?? null);
+      }
+      return await this.run({ id: payload.id, action: payload.action, app: payload.app, languages: payload.languages });
+    } catch (error) {
+      const text = this.say(action === 'outputRun' ? 'actionFailed' : 'saveFailed', describeError(this.language(), error));
+      this.tell(text);
+      throw Object.assign(new Error(text), { announced: true, cause: error });
+    }
+  }
+
   async cleanup() {
     await this.fs.rm(this.tempDirectory, { recursive: true, force: true });
   }
 }
 
-module.exports = { FORMATS, formatFromExtension, matchesFormat, fileBaseName, uniqueOutputPath, defaultSaveFolder, outputText, prepareOcrLanguages, createAnnouncer, printPage, printWithWindow, OutputActions };
+module.exports = { FORMATS, formatFromExtension, matchesFormat, fileBaseName, uniqueOutputPath, defaultSaveFolder, outputText, describeError, prepareOcrLanguages, createAnnouncer, printPage, printWithWindow, OutputActions };

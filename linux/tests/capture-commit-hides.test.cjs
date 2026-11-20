@@ -34,7 +34,7 @@ test('commit writes clipboard with own fingerprint before insert',()=>{
  const inserts=[branch.indexOf('store.insertAnnotatedImage('),branch.indexOf("store.insert('image'")];
  assert.ok(write>0,'rendered PNG goes to the clipboard through the shared image path');
  assert.ok(inserts.every(index=>index>write&&index>hidden),'clipboard and hide happen before the library insert');
- assert.match(branch,/catch\([^)]*\)\s*=>\s*\{?[^}]*notify\(|catch\s*\([^)]*\)\s*\{[^}]*notify\(/,'store failure is reported with notify');
+ assert.match(branch,/catch\s*\([^)]*\)\s*\{[^}]*announce\(/,'store failure is announced (the window is already hidden here)');
  const fn=name=>{const at=src.indexOf('async function '+name+'(');assert.ok(at>0,name+' exists');const rest=src.slice(at);return rest.slice(0,rest.search(/\n}|\);}\n/)+3);};
  assert.match(fn('writeImageClipboard'),/writeMarkedClipboard\(/,'image helper uses the shared marked write');
  const marked=fn('writeMarkedClipboard');
@@ -71,9 +71,18 @@ test('copy:false commits without clipboard, beep or markCopied; default path sti
 
 test('output wiring: commands, watcher suppression, saved-path reveal and quit cleanup',()=>{
  const src=fs.readFileSync(path.join(__dirname,'../main.cjs'),'utf8');
- for(const name of ['outputInfo','outputPlan','outputWrite','outputRun'])assert.ok(src.includes(`action==='${name}'`),name);
+ assert.match(src,/OUTPUT_COMMANDS=new Set\(\['outputInfo','outputPlan','outputWrite','outputRun','outputFailed'\]\)/);
+ assert.match(src,/else if\(OUTPUT_COMMANDS\.has\(action\)\)result=await output\.handle\(action,payload\);/,'every output command goes through the announcing handler');
+ assert.match(src,/catch\(error\)\{if\(!error\?\.announced\)notify\(error\.message\);return state\(\{error:error\.message\}\);\}/,'announced output failures are not toasted twice, the error shape is kept');
  assert.match(src,/if\(output\?\.ownsFile\(file\)\)return;/);
  assert.match(src,/await output\.savedFile\(item\.id\)/);
  assert.match(src,/void output\?\.cleanup\(\)/);
  assert.doesNotMatch(src,/copyFileSync|mkdirSync\(languageDirectory/,'OCR language files are prepared asynchronously');
+});
+
+test('main-side failure texts are translated and a Library failure after a capture is announced',()=>{
+ const src=fs.readFileSync(path.join(__dirname,'../main.cjs'),'utf8'),branch=commitCaptureBranch();
+ assert.match(branch,/announce\(outputText\(outputLanguage\(\),copyToClipboard\?'libraryFailedCopied':'libraryFailed',describeError\(outputLanguage\(\),error\)\)\)/);
+ assert.doesNotMatch(src,/could not be saved to the Library|Image changed during recognition'|'The image could not be opened\.'/,'no English literals left in main');
+ assert.match(src,/language:outputLanguage,/);
 });

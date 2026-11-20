@@ -247,10 +247,10 @@ test('scanCode reports a missing zbarimg',()=>fixture(async({actions,item})=>{
 test('share spawns qml6 with the share script',()=>fixture(async({actions,item,calls,root})=>{
   await actions.share(item.id);
   const [run]=calls.spawn;assert.equal(run.command,'qml6');
-  assert.equal(run.args.length,3);assert.deepEqual(run.args.slice(0,2),[path.join(root,'assets','share.qml'),'--']);assert.ok(run.args[2].endsWith('.png'));
+  assert.equal(run.args.length,4);assert.deepEqual(run.args.slice(0,3),[path.join(root,'assets','share.qml'),'--','image/png']);assert.ok(run.args[3].endsWith('.png'));
   assert.equal(run.options.detached,true);assert.equal(run.options.stdio,'ignore');
   const qml=fs.readFileSync(path.join(__dirname,'..','assets','share.qml'),'utf8');
-  for(const part of ['ApplicationWindow','AlternativesView','pluginType: "Export"','mimeType: "image/png"','Qt.quit()','Paylaş','420','520'])assert.ok(qml.includes(part),part);
+  for(const part of ['ApplicationWindow','AlternativesView','pluginType: "Export"','mimeType: root.mime','Qt.quit()','Paylaş','420','520'])assert.ok(qml.includes(part),part);
 },withFakes()));
 test('share refuses when Purpose is unavailable',()=>fixture(async({actions,item,calls})=>{
   await assert.rejects(actions.share(item.id),/Sharing is unavailable/);assert.equal(calls.spawn.length,0);
@@ -365,4 +365,103 @@ test('printWithWindow loads a sandboxed script-free page beside the image',async
     await assert.rejects(O.printWithWindow(image,{BrowserWindow:fakeWindowClass(broken,{loadFails:true}),directory}),/load failed/);
     assert.ok(broken.windows[0].destroyed,'window destroyed when loading fails');assert.equal(broken.print.length,0);
   }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
+// ---- Final review fixes ----
+const editedPng=()=>{const other=Buffer.from(png);other[other.length-5]^=1;return other;};
+test('a Library edit makes the saved file stale: no savedFile, fresh temp copy',()=>fixture(async({actions,item,store,runtimeDir})=>{
+  const plan=await actions.plan(item.id,'save');const {path:saved}=await actions.write(plan.token);
+  assert.equal(await actions.savedFile(item.id),saved);
+  const edited=editedPng();store.modify('saveImage',{id:item.id,dataUrl:'data:image/png;base64,'+edited.toString('base64')});
+  assert.equal(await actions.savedFile(item.id),null,'the pre-edit file is no longer this item');
+  const file=await actions.externalFile(item.id);
+  assert.notEqual(file,saved);assert.ok(file.startsWith(path.join(runtimeDir,'clipboardline-output')+path.sep));assert.deepEqual(fs.readFileSync(file),edited);
+  assert.deepEqual(await actions.copyLocation(item.id),{needsSave:true});
+}));
+test('handle announces plan and write failures as save failures',()=>fixture(async({actions,item,calls,folder})=>{
+  await assert.rejects(actions.handle('outputWrite',{token:'nope'}),error=>error.announced===true&&/^Görsel kaydedilemedi: /.test(error.message));
+  assert.match(calls.notify.at(-1)[0],/^Görsel kaydedilemedi: /);
+  const plan=await actions.handle('outputPlan',{id:item.id,mode:'save'});fs.mkdirSync(folder,{recursive:true});fs.writeFileSync(plan.path,'x');
+  await assert.rejects(actions.handle('outputWrite',{token:plan.token}),error=>error.announced&&/zaten var/.test(error.message)&&!/EEXIST/.test(error.message));
+  await assert.rejects(actions.handle('outputPlan',{id:item.id,mode:'bogus'}),error=>error.announced&&/^Görsel kaydedilemedi/.test(error.message));
+  const before=calls.notify.length;
+  assert.equal(typeof (await actions.handle('outputInfo')).formats,'object');assert.equal(calls.notify.length,before);
+},{...withFakes(),language:'tr'}));
+test('handle announces run failures as action failures',()=>fixture(async({actions,item,calls})=>{
+  await assert.rejects(actions.handle('outputRun',{id:item.id,action:'share'}),error=>error.announced&&error.message==='İşlem başarısız oldu: Paylaşım kullanılamıyor');
+  assert.equal(calls.notify.at(-1)[0],'İşlem başarısız oldu: Paylaşım kullanılamıyor');
+  assert.equal(calls.spawn.length,0);
+},{...withFakes({share:false}),language:'tr'}));
+test('handle outputFailed announces a short renderer failure',()=>fixture(async({actions,calls,item})=>{
+  assert.deepEqual(await actions.handle('outputFailed',{message:'The original image could not be opened.'}),{announced:true});
+  assert.equal(calls.notify.at(-1)[0],'The image could not be saved: The original image could not be opened.');
+  const plan=await actions.plan(item.id,'save');assert.equal(actions.tokens.size,1);
+  await actions.handle('outputFailed',{message:'Encode failed',token:plan.token});assert.equal(actions.tokens.size,0,'the failed plan releases its path');
+  for(const message of [undefined,42,'','x'.repeat(301)])await assert.rejects(actions.handle('outputFailed',{message}),/Invalid failure message/);
+  await assert.rejects(actions.handle('outputNope',{}),/Unknown output command/);
+}));
+test('errors are Turkish in a Turkish UI',()=>fixture(async({actions,item})=>{
+  await assert.rejects(actions.openWith(item.id,'evil.desktop'),/Bu uygulama görseller için kullanılamıyor/);
+  await assert.rejects(actions.share(item.id),/Paylaşım kullanılamıyor/);
+},{...withFakes({share:false}),language:'tr'}));
+test('scan errors are Turkish in a Turkish UI',()=>fixture(async({actions,item})=>{
+  await assert.rejects(actions.scanCode(item.id),/QR kod taraması başarısız oldu: zaman aşımı/);
+},{...withFakes({scanError:Object.assign(new Error('x'),{killed:true})}),language:'tr'}));
+test('missing zbarimg is Turkish in a Turkish UI',()=>fixture(async({actions,item})=>{
+  await assert.rejects(actions.scanCode(item.id),/QR kod taraması için zbarimg \(zbar\) kurulmalı/);
+},{...withFakes({scan:{available:false,codes:[]}}),language:'tr'}));
+test('missing OCR languages are Turkish in a Turkish UI',()=>fixture(async({actions,item,store})=>{
+  store.data.settings.output.ocrLanguages=['chi_sim'];await assert.rejects(actions.extractText(item.id),/Kurulu OCR dili yok/);
+},{...withFakes(),language:'tr'}));
+test('print failures are translated',()=>fixture(async({actions,item})=>{
+  await assert.rejects(actions.printImage(item.id),/Yazdırma başarısız oldu: failed/);
+},{extra:()=>({print:async()=>{throw Object.assign(new Error('Printing failed: failed'),{code:'EPRINT',reason:'failed'});}}),language:'tr'}));
+test('describeError maps file errors and print timeouts',()=>{
+  assert.equal(O.describeError('en',Object.assign(new Error('EACCES: permission denied'),{code:'EACCES'})),'Permission denied');
+  assert.equal(O.describeError('tr',Object.assign(new Error('x'),{code:'ENOSPC'})),'Diskte yer kalmadı');
+  assert.equal(O.describeError('tr',Object.assign(new Error('x'),{code:'EPRINT',reason:'timeout'})),'Yazdırma zaman aşımına uğradı');
+  assert.equal(O.describeError('en',new Error('Plain')),'Plain');
+  assert.equal(O.outputText('tr','libraryFailed','x'),'Ekran görüntüsü Kütüphane’ye kaydedilemedi: x');
+  assert.equal(O.outputText('en','libraryFailedCopied','x'),'Screenshot copied, but it could not be saved to the Library: x');
+  assert.equal(O.outputText('en','actionFailed','x'),'The action failed: x');
+});
+test('two pending plans never get the same path',()=>fixture(async({actions,item,clock,store})=>{
+  store.data.settings.output.filenameTemplate='Shot';
+  const a=await actions.plan(item.id,'save'),b=await actions.plan(item.id,'save');
+  assert.notEqual(a.path,b.path);assert.ok(b.path.endsWith('-2.png'));
+  await actions.write(a.token);await actions.write(b.token);
+  const c=await actions.plan(item.id,'save');assert.ok(c.path.endsWith('-3.png'));
+  clock.time+=121000;const d=await actions.plan(item.id,'save');assert.equal(d.path,c.path,'an expired plan no longer holds its path');
+}));
+test('plan prunes expired tokens',()=>fixture(async({actions,item,clock})=>{
+  await actions.plan(item.id,'save');await actions.plan(item.id,'save');assert.equal(actions.tokens.size,2);
+  clock.time+=121000;await actions.plan(item.id,'save');assert.equal(actions.tokens.size,1);
+}));
+test('share passes the MIME type of the shared file',()=>fixture(async({actions,item,calls,store})=>{
+  await actions.share(item.id);assert.deepEqual(calls.spawn[0].args.slice(1,3),['--','image/png']);assert.ok(calls.spawn[0].args[3].endsWith('.png'));assert.equal(calls.spawn[0].args.length,4);
+  store.data.settings.output.format='jpg';const plan=await actions.plan(item.id,'save');await actions.write(plan.token,url('image/jpeg',jpeg));
+  await actions.share(item.id);assert.deepEqual(calls.spawn[1].args.slice(1),['--','image/jpeg',plan.path]);
+  const qml=fs.readFileSync(path.join(__dirname,'..','assets','share.qml'),'utf8');
+  assert.ok(!qml.includes('mimeType: "image/png"'),'no hard-coded MIME type');assert.match(qml,/mimeType: root\.mime/);assert.match(qml,/args\[args\.length - 2\]/);
+},withFakes()));
+test('printWithWindow gives up after its timeout and destroys the window',async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'clipboardline-output-test-'));
+  try{
+    const directory=path.join(root,'tmp');fs.mkdirSync(directory,{mode:0o700});const image=path.join(directory,'a.png');fs.writeFileSync(image,png);
+    const log={windows:[],print:[],loaded:[]};
+    const Hanging=class extends fakeWindowClass(log){constructor(options){super(options);this.webContents={print:options=>{log.print.push(options);}};}};
+    await assert.rejects(O.printWithWindow(image,{BrowserWindow:Hanging,directory,timeout:20}),error=>error.code==='EPRINT'&&error.reason==='timeout');
+    assert.ok(log.windows[0].destroyed);
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+test('announcer keeps desktop notifications alive until they finish',async()=>{
+  const shown=[],revealed=[],timers=[];
+  class FakeNotification extends EventEmitter{static isSupported(){return true;}show(){shown.push(this);}}
+  const announce=O.createAnnouncer({visible:()=>false,toast:()=>{},Notification:FakeNotification,testMode:false,reveal:file=>revealed.push(file),
+    setTimer:(fn,ms)=>{const timer={fn,ms,unref(){this.unrefed=true;}};timers.push(timer);return timer;},clearTimer:timer=>{timer.cleared=true;}});
+  announce('A',{file:'/x/a.png'});announce('B');announce('C');
+  assert.equal(announce.live.size,3);assert.equal(timers[0].ms,60000);assert.ok(timers.every(timer=>timer.unrefed));
+  shown[0].emit('click');assert.deepEqual(revealed,['/x/a.png']);assert.equal(announce.live.size,2);assert.ok(timers[0].cleared);
+  shown[1].emit('close');shown[1].emit('failed');assert.equal(announce.live.size,1);
+  timers[2].fn();assert.equal(announce.live.size,0);
 });

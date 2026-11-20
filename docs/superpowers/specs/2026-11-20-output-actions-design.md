@@ -126,7 +126,7 @@ application…" chooser; automatic QR detection while drawing (explicit action i
 12. **Share.** `qml6 <assets/share.qml> -- <file>`: a small window with `Purpose.AlternativesView`
     (`pluginType:"Export"`, `mimeType:"image/png"`, `urls:[file]`), quits when the job finishes or is cancelled.
     Availability = `qml6` on PATH and `/usr/lib/qt6/qml/org/kde/purpose/qmldir` (or another `QML_IMPORT_PATH`) exists.
-13. **QR.** `zbarimg --xml -q --nodbus -Sbinary <file>` (async `execFile`, 10 s timeout); parse `<symbol type=…>`
+13. **QR.** `zbarimg --xml -q --nodbus -Sqrcode.binary <file>` (not `-Sbinary`: the global form loses the XML output; see commit 1d39fdf) (async `execFile`, 10 s timeout); parse `<symbol type=…>`
     and `<data>` (CDATA text, or `format="base64"`). Exit code 4 = nothing found. Text is "binary" if it is not valid
     UTF-8 or contains control characters other than tab/CR/LF. The first text symbol's data is copied; if several are
     found the notification says how many. Hidden when `zbarimg` is missing.

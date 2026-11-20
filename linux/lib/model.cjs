@@ -436,6 +436,8 @@ class Store {
         if (!validEditAnnotations(annotations) || (crop !== null && (typeof crop !== 'object' || ['x','y','width','height'].some(k => !Number.isFinite(crop[k])) || crop.x<0 || crop.y<0 || crop.width<=0 || crop.height<=0))) fail('Invalid image edit metadata');
         if(crop){const original=fs.readFileSync(this.mediaPath(item.id,true));if(crop.x+crop.width>original.readUInt32BE(16)||crop.y+crop.height>original.readUInt32BE(20))fail('Crop is outside the original image');}
         item.renderedFile = this.putPNG(Buffer.from(payload.dataUrl.split(',')[1], 'base64')); item.annotations = clone(annotations); item.crop = clone(crop); item.ocrText = '';
+        // The saved file shows the old version; output actions must not hand it out any more.
+        item.savedPath = '';
       } else if (action === 'delete') { if (!item.trashedAt) fail('Move items to Trash before permanent deletion'); }
       else fail('Unknown library action');
       if(action!=='markCopied')item.updatedAt = now;

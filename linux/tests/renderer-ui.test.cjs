@@ -1162,3 +1162,32 @@ test('a failed capture commit restores the session and does not run the output',
  await f.key('KeyS',{ctrl:true});assert.equal(outputCommands(f).length,0);assert.match(f.main,/id="capture-canvas"/);
  await f.key('KeyS',{ctrl:true});assert.equal(outputCommands(f).length,0,'busy was reset and the retry also fails cleanly');
 });
+
+test('Space typed into a text field never runs the selected output row',async()=>{
+ const f=fixture();await f.ready();await f.key('KeyE',{ctrl:true});assert.match(f.menu,/role="menu"/);
+ const field=f.editor('modal-query');await f.key('Space',{target:field});
+ assert.equal(outputCommands(f).length,0,'no output action ran');
+ await f.key('KeyE',{ctrl:true});await f.key('Space');assert.equal(outputCommands(f).length,2,'Space outside a field still runs the row');
+});
+
+test('Actions palette disables Share and Scan QR code when outputInfo says they are unavailable',async()=>{
+ const f=fixture();await f.ready();await f.key('KeyK',{ctrl:true});
+ assert.doesNotMatch(f.overlay,/data-command="output-share"[^>]*disabled/,'unknown availability keeps the entry enabled');await f.key('Escape');
+ f.outputConfig.info.shareAvailable=false;f.outputConfig.info.codeAvailable=false;await f.key('KeyE',{ctrl:true});await f.key('Escape');
+ await f.key('KeyK',{ctrl:true});
+ assert.match(f.overlay,/data-command="output-share"[^>]*disabled/);assert.match(f.overlay,/data-command="output-scanCode"[^>]*disabled/);
+ assert.match(f.overlay,/Sharing needs KDE Purpose \(qml6\)\./);assert.match(f.overlay,/QR code scanning needs zbarimg \(zbar\)\./);
+ assert.doesNotMatch(f.overlay,/data-command="output-print"[^>]*disabled/);
+});
+
+test('a failed jpg encode is reported to main instead of writing',async()=>{
+ const f=fixture();f.outputConfig.plan={token:'tok-jpg',path:'/home/u/Pictures/a.jpg',format:'jpg',quality:80};await f.ready();f.failExportOnce();await f.key('KeyS',{ctrl:true});
+ const sent=outputCommands(f).map(value=>value.action);assert.deepEqual(sent,['outputPlan','outputFailed']);
+ assert.deepEqual(outputCommands(f)[1].payload,{token:'tok-jpg',message:'Synthetic canvas export rejection'});
+});
+
+test('Turkish palette shows the translated unavailable reason',async()=>{
+ const f=fixture();f.api.emit({settings:{...f.state.settings,language:'tr'}});f.outputConfig.info.codeAvailable=false;await f.ready();
+ await f.key('KeyE',{ctrl:true});await f.key('Escape');await f.key('KeyK',{ctrl:true});
+ assert.match(f.overlay,/QR kod taraması için zbarimg \(zbar\) gerekli\./);assert.match(f.overlay,/Paylaşım için KDE Purpose \(qml6\) gerekli\./);
+});
