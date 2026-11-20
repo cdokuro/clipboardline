@@ -48,3 +48,13 @@ test('still hides, never shows',()=>{
  assert.doesNotMatch(branch,/\bshow\(/);
  assert.match(branch,/queueOCR\(item\.id\)/);assert.match(branch,/refreshImageSearch\(\)/);assert.match(branch,/shell\.beep\(\)/);
 });
+
+test('annotated commit: clipboard and hide never wait for the original PNG',()=>{
+ const branch=commitCaptureBranch();
+ const write=branch.search(/await writeImageClipboard\(/),hidden=branch.indexOf('await hide()');
+ assert.doesNotMatch(branch,/originalDataUrl/,'the renderer no longer encodes and sends a second PNG');
+ assert.match(branch,/payload\.originalRect/);
+ const cut=branch.search(/\.crop\(/);assert.ok(cut>write&&cut>hidden,'the clean original is cut from the screenshot after clipboard + hide');
+ assert.match(branch,/store\.insertAnnotatedImage\([^;]*\.crop\(rect\)\.toPNG\(\),finalBuffer,annotations\)/,'one new item gets original + rendered + annotations');
+ assert.ok(branch.search(/pendingCapture\?\.buffer/)<branch.indexOf('pendingCapture=null'),'the screenshot buffer is kept before the capture is cleared');
+});

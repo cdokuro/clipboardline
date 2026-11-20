@@ -829,13 +829,16 @@ test('capture redo Ctrl+Shift+Z and Ctrl+Y',async()=>{
 
 const captureCommits=f=>f.commands.filter(value=>value.action==='commitCapture').length;
 const crop0=async f=>{await captureDrag(f,[100,50],[300,150]);return captureDoc(f).crop;};
-test('commit sends original, rendered and offset annotations',async()=>{
+// Q2: the commit carries only the rendered PNG to encode; main cuts the clean original from its
+// own copy of the screenshot after the clipboard write and hide.
+test('commit sends rendered PNG, original rect and offset annotations',async()=>{
  const f=captureFixture();await f.ready();await crop0(f);
  await f.key('KeyR');await captureDrag(f,[120,60],[180,100]);await captureDrag(f,[400,60],[450,100]);
  await f.key('Enter');
  const commits=f.commands.filter(value=>value.action==='commitCapture');assert.equal(commits.length,1);
- const {dataUrl,originalDataUrl,annotations}=commits[0].payload;
- assert.match(dataUrl,/^data:image\/png;base64,/);assert.match(originalDataUrl,/^data:image\/png;base64,/);
+ const {dataUrl,originalRect,annotations}=commits[0].payload;
+ assert.match(dataUrl,/^data:image\/png;base64,/);assert.equal(Object.hasOwn(commits[0].payload,'originalDataUrl'),false,'no second PNG encode before the commit');
+ assert.deepEqual(originalRect,{x:100,y:50,width:200,height:100});
  assert.equal(annotations.length,2,'annotations outside the crop stay in the document');
  const near=(a,b)=>Math.abs(a-b)<1e-6;
  assert.ok(near(annotations[0].x,20)&&near(annotations[0].y,10)&&near(annotations[0].width,60)&&near(annotations[0].height,40),'translated by -crop origin');
@@ -845,7 +848,7 @@ test('commit without annotations sends no original',async()=>{
  const f=captureFixture();await f.ready();await crop0(f);await f.key('Enter');
  const [commit]=f.commands.filter(value=>value.action==='commitCapture');
  assert.match(commit.payload.dataUrl,/^data:image\/png;base64,/);
- assert.equal(Object.hasOwn(commit.payload,'originalDataUrl'),false);assert.equal(Object.hasOwn(commit.payload,'annotations'),false);
+ assert.equal(Object.hasOwn(commit.payload,'originalRect'),false);assert.equal(Object.hasOwn(commit.payload,'originalDataUrl'),false);assert.equal(Object.hasOwn(commit.payload,'annotations'),false);
 });
 test('arrow keys move crop',async()=>{
  const f=captureFixture();await f.ready();await crop0(f);

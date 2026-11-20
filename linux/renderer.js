@@ -634,12 +634,9 @@ async function commitCaptureSession(){
    const rw=crop?Math.max(1,Math.min(width-rx,Math.round(crop.width))):width,rh=crop?Math.max(1,Math.min(height-ry,Math.round(crop.height))):height;
    const region=source=>{if(!crop)return source;const out=document.createElement('canvas');out.width=rw;out.height=rh;out.getContext('2d').drawImage(source,rx,ry,rw,rh,0,0,rw,rh);return out;};
    dataUrl=region(full).toDataURL('image/png');
-   // Editable document: the clean (cropped) base plus annotations in its coordinates.
-   if(annotations.length){
-    const original=document.createElement('canvas');original.width=rw;original.height=rh;
-    original.getContext('2d').drawImage(session.base,rx,ry,rw,rh,0,0,rw,rh);
-    extra={originalDataUrl:original.toDataURL('image/png'),annotations:offsetCaptureAnnotations(annotations,rx,ry)};
-   }
+   // Editable document: the clean (cropped) base plus annotations in its coordinates. Only the
+   // rect goes along; main cuts the original from its own screenshot after clipboard + hide (Q2).
+   if(annotations.length)extra={originalRect:{x:rx,y:ry,width:rw,height:rh},annotations:offsetCaptureAnnotations(annotations,rx,ry)};
   }
   ui.captureSession=null;
   await command('commitCapture',{dataUrl,...extra});

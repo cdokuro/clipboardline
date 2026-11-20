@@ -602,7 +602,7 @@ async function command(action,payload={}) {
   }
   else if(action==='capture')result=await capture();
   else if(action==='commitCapture'){
-    let finalBuffer=null;
+    let finalBuffer=null;const screenshot=pendingCapture?.buffer||null;
     if(typeof payload.dataUrl==='string'&&payload.dataUrl.startsWith('data:image/png;base64,')){
       if(payload.dataUrl.length>90_000_000)throw new Error('Invalid captured image');
       const decoded=nativeImage.createFromDataURL(payload.dataUrl);
@@ -623,10 +623,14 @@ async function command(action,payload={}) {
     try{
       const annotations=Array.isArray(payload.annotations)&&payload.annotations.length?payload.annotations:null;
       if(annotations){
-        if(typeof payload.originalDataUrl!=='string'||!payload.originalDataUrl.startsWith('data:image/png;base64,')||payload.originalDataUrl.length>90_000_000)throw new Error('Invalid original image');
-        const original=nativeImage.createFromDataURL(payload.originalDataUrl);
-        if(original.isEmpty()||original.getSize().width*original.getSize().height>80_000_000)throw new Error('Invalid original image');
-        item=store.insertAnnotatedImage(original.toPNG(),finalBuffer,annotations);
+        // The clean original is cut here, after the clipboard write and hide, from the same
+        // screenshot the overlay showed; the renderer only sends its crop rect.
+        if(!screenshot)throw new Error('No active screen capture.');
+        const source=nativeImage.createFromBuffer(screenshot),size=source.getSize(),rect=payload.originalRect;
+        const valid=rect&&['x','y','width','height'].every(key=>Number.isInteger(rect[key]))&&rect.x>=0&&rect.y>=0&&rect.width>=1&&rect.height>=1&&rect.x+rect.width<=size.width&&rect.y+rect.height<=size.height;
+        if(source.isEmpty()||!valid)throw new Error('Invalid original image');
+        const whole=rect.x===0&&rect.y===0&&rect.width===size.width&&rect.height===size.height;
+        item=store.insertAnnotatedImage(whole?screenshot:source.crop(rect).toPNG(),finalBuffer,annotations);
       }else item=store.insert('image',finalBuffer);
       store.markCopied([item.id]);
       queueOCR(item.id);refreshImageSearch();
