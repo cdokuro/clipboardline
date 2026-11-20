@@ -7,7 +7,7 @@ const jpeg=Buffer.concat([Buffer.from([0xff,0xd8,0xff,0xe0]),Buffer.alloc(16)]);
 const webp=Buffer.concat([Buffer.from('RIFF'),Buffer.alloc(4),Buffer.from('WEBPVP8 '),Buffer.alloc(8)]);
 const url=(mime,buffer)=>`data:${mime};base64,${buffer.toString('base64')}`;
 
-async function fixture(fn,{saveFolder,language='en'}={}){
+async function fixture(fn,{saveFolder,language='en',extra}={}){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'clipboardline-output-test-'));
   try{
     const store=new Store(path.join(root,'store'));
@@ -19,7 +19,7 @@ async function fixture(fn,{saveFolder,language='en'}={}){
     const runtimeDir=path.join(root,'run');fs.mkdirSync(runtimeDir);
     const actions=new O.OutputActions({store,settings:()=>store.data.settings,now:()=>new Date(clock.time),home:path.join(root,'home'),configHome:path.join(root,'config'),runtimeDir,language:()=>language,
       dialog:{showSaveDialog:async options=>{calls.dialog.push(options);return state.dialogResult;}},
-      writeText:async text=>{calls.text.push(text);},reveal:file=>{calls.reveal.push(file);},notify:(text,extra)=>{calls.notify.push([text,extra]);}});
+      writeText:async text=>{calls.text.push(text);},reveal:file=>{calls.reveal.push(file);},notify:(text,more)=>{calls.notify.push([text,more]);},...(extra?extra({root,store,calls,runtimeDir}):{})});
     const item=store.insert('image',png);
     await fn({root,store,actions,item,clock,calls,state,folder,runtimeDir});
   }finally{fs.rmSync(root,{recursive:true,force:true});}
@@ -171,3 +171,198 @@ test('externalFile never overwrites or follows an existing temp entry',()=>fixtu
 test('saveAs rejects a relative dialog path',()=>fixture(async({actions,item,state})=>{
   state.dialogResult={canceled:false,filePath:'rel/shot.png'};await assert.rejects(actions.plan(item.id,'saveAs'),/Invalid save path/);
 }));
+
+// ---- Task 4: remaining actions ----
+const {EventEmitter}=require('node:events');
+const zlib=require('node:zlib');
+const LANGS=[{code:'deu',name:{en:'German',tr:'Almanca'},source:'system',file:'/td/deu.traineddata'},{code:'eng',name:{en:'English',tr:'İngilizce'},source:'bundled',file:'/b/eng.gz'},{code:'tur',name:{en:'Turkish',tr:'Türkçe'},source:'bundled',file:'/b/tur.gz'}];
+function fakeSpawn(calls,{fail=false}={}){
+  return (command,args,options)=>{const child=new EventEmitter();child.unref=()=>{calls.unref=(calls.unref||0)+1;};calls.spawn.push({command,args,options});
+    process.nextTick(()=>fail?child.emit('error',Object.assign(new Error('spawn '+command+' ENOENT'),{code:'ENOENT'})):child.emit('spawn'));return child;};
+}
+function fakeIntegration(calls,o={}){
+  const real=require('../lib/desktop-integration.cjs');
+  return {...real,
+    imageApps:async options=>{calls.apps.push(options);return o.apps||[{id:'b.desktop',name:options.language==='tr'?'Bé':'B',file:'/apps/b.desktop'}];},
+    ocrLanguages:async options=>{calls.langs.push(options);return o.languages||LANGS;},
+    shareAvailable:async()=>{calls.share=(calls.share||0)+1;return o.share??true;},
+    toolAvailable:async name=>{calls.tool.push(name);return o.zbar??true;},
+    scanCodes:async file=>{calls.scan.push(file);if(o.scanError)throw o.scanError;return o.scan||{available:true,codes:[]};}};
+}
+function withFakes(o={}){
+  return {extra:({calls,root})=>{Object.assign(calls,{spawn:[],apps:[],langs:[],tool:[],scan:[],ocr:[],print:[]});
+    return {spawn:fakeSpawn(calls,o),assetsDir:path.join(root,'assets'),integration:fakeIntegration(calls,o),env:{PATH:'/nowhere'},ocrBundledDir:'/bundled',
+      ocr:async(id,languages)=>{calls.ocr.push([id,languages]);return {text:o.ocrText??'Hallo'};},
+      print:async file=>{calls.print.push(file);return {printed:true};}};},language:o.language};
+}
+test('openWith launches only listed apps with a non-media file',()=>fixture(async({actions,item,store,calls,runtimeDir})=>{
+  await actions.openWith(item.id,'b.desktop');
+  assert.equal(calls.spawn.length,1);const [run]=calls.spawn;
+  assert.equal(run.command,'gio');assert.deepEqual(run.args.slice(0,2),['launch','/apps/b.desktop']);
+  assert.notEqual(run.args[2],store.mediaPath(item.id));assert.ok(run.args[2].startsWith(path.join(runtimeDir,'clipboardline-output')+path.sep));
+  assert.equal(run.options.detached,true);assert.equal(run.options.stdio,'ignore');assert.equal(calls.unref,1);
+  await assert.rejects(actions.openWith(item.id,'evil.desktop'),/not available/);assert.equal(calls.spawn.length,1);
+  const plan=await actions.plan(item.id,'save');const {path:saved}=await actions.write(plan.token);
+  await actions.openWith(item.id,'b.desktop');assert.equal(calls.spawn[1].args[2],saved);
+},withFakes()));
+test('openWith reports a launcher that cannot start',()=>fixture(async({actions,item})=>{
+  await assert.rejects(actions.openWith(item.id,'b.desktop'),/ENOENT/);
+},withFakes({fail:true})));
+test('extractText copies recognized text with chosen languages',()=>fixture(async({actions,item,calls})=>{
+  assert.deepEqual(await actions.extractText(item.id,['deu']),{text:'Hallo'});
+  assert.deepEqual(calls.ocr,[[item.id,['deu']]]);assert.deepEqual(calls.text,['Hallo']);assert.equal(calls.notify.at(-1)[0],'Text copied');
+  await actions.extractText(item.id);assert.deepEqual(calls.ocr[1][1],['eng','tur'],'defaults come from settings');
+  await assert.rejects(actions.extractText(item.id,['xyz']),/Invalid OCR languages/);
+  await assert.rejects(actions.extractText(item.id,[]),/Invalid OCR languages/);
+  await assert.rejects(actions.extractText(item.id,'eng'),/Invalid OCR languages/);
+  await assert.rejects(actions.extractText(item.id,Array(17).fill('eng')),/Invalid OCR languages/);
+  assert.equal(calls.ocr.length,2);
+},withFakes()));
+test('extractText reports empty text without writing',()=>fixture(async({actions,item,calls,store})=>{
+  assert.deepEqual(await actions.extractText(item.id,['eng']),{text:''});
+  assert.deepEqual(calls.text,[]);assert.equal(calls.notify.at(-1)[0],'No text found');
+  store.data.settings.output.ocrLanguages=['chi_sim','deu'];await actions.extractText(item.id);assert.deepEqual(calls.ocr.at(-1)[1],['deu'],'uninstalled defaults are skipped');
+},withFakes({ocrText:'  \n'})));
+test('scanCode copies the first text code',()=>fixture(async({actions,item,calls})=>{
+  const result=await actions.scanCode(item.id);
+  assert.equal(result.codes.length,2);assert.deepEqual(calls.text,['https://a.example/'+'x'.repeat(100)]);
+  assert.match(calls.notify.at(-1)[0],/2 codes found/);assert.ok(calls.notify.at(-1)[0].length<140,'preview is cut');
+  assert.ok(calls.scan[0].includes('clipboardline-output'),'zbarimg reads a temp copy');
+},withFakes({scan:{available:true,codes:[{type:'QR-Code',text:'https://a.example/'+'x'.repeat(100),binary:false},{type:'EAN-13',text:'123',binary:false}]}})));
+test('scanCode with a single code',()=>fixture(async({actions,item,calls})=>{
+  await actions.scanCode(item.id);assert.equal(calls.notify.at(-1)[0],'Code found: hi (copied)');
+},withFakes({scan:{available:true,codes:[{type:'QR-Code',text:'hi',binary:false}]}})));
+test('scanCode binary only',()=>fixture(async({actions,item,calls})=>{
+  await actions.scanCode(item.id);assert.deepEqual(calls.text,[]);assert.equal(calls.notify.at(-1)[0],'Code found with binary content');
+},withFakes({scan:{available:true,codes:[{type:'QR-Code',text:null,binary:true}]}})));
+test('scanCode none',()=>fixture(async({actions,item,calls})=>{
+  assert.deepEqual(await actions.scanCode(item.id),{codes:[]});assert.deepEqual(calls.text,[]);assert.equal(calls.notify.at(-1)[0],'No QR code or barcode found');
+},withFakes()));
+test('scanCode surfaces tool failures as short errors',()=>fixture(async({actions,item,calls})=>{
+  await assert.rejects(actions.scanCode(item.id),error=>/QR code scan failed: timed out/.test(error.message));assert.deepEqual(calls.text,[]);
+},withFakes({scanError:Object.assign(new Error('Command failed: zbarimg\nlong stderr'),{killed:true,signal:'SIGTERM'})})));
+test('scanCode reports a missing zbarimg',()=>fixture(async({actions,item})=>{
+  await assert.rejects(actions.scanCode(item.id),/zbarimg/);
+},withFakes({scan:{available:false,codes:[]}})));
+test('share spawns qml6 with the share script',()=>fixture(async({actions,item,calls,root})=>{
+  await actions.share(item.id);
+  const [run]=calls.spawn;assert.equal(run.command,'qml6');
+  assert.equal(run.args.length,3);assert.deepEqual(run.args.slice(0,2),[path.join(root,'assets','share.qml'),'--']);assert.ok(run.args[2].endsWith('.png'));
+  assert.equal(run.options.detached,true);assert.equal(run.options.stdio,'ignore');
+  const qml=fs.readFileSync(path.join(__dirname,'..','assets','share.qml'),'utf8');
+  for(const part of ['ApplicationWindow','AlternativesView','pluginType: "Export"','mimeType: "image/png"','Qt.quit()','Paylaş','420','520'])assert.ok(qml.includes(part),part);
+},withFakes()));
+test('share refuses when Purpose is unavailable',()=>fixture(async({actions,item,calls})=>{
+  await assert.rejects(actions.share(item.id),/Sharing is unavailable/);assert.equal(calls.spawn.length,0);
+},withFakes({share:false})));
+test('print hands a non-media file to the injected printer',()=>fixture(async({actions,item,calls,store})=>{
+  assert.deepEqual(await actions.printImage(item.id),{printed:true});
+  assert.equal(calls.print.length,1);assert.notEqual(calls.print[0],store.mediaPath(item.id));assert.ok(fs.existsSync(calls.print[0]));
+},withFakes()));
+test('info reports apps, languages and availability',()=>fixture(async({actions,calls,clock,folder})=>{
+  const info=await actions.info();
+  assert.deepEqual(info,{defaultFolder:folder,formats:['png','jpg','webp'],format:'png',apps:[{id:'b.desktop',name:'Bé'}],
+    languages:[{code:'deu',name:'Almanca'},{code:'eng',name:'İngilizce'},{code:'tur',name:'Türkçe'}],defaultLanguages:['eng','tur'],shareAvailable:true,codeAvailable:true});
+  assert.equal(calls.apps[0].language,'tr');assert.equal(calls.langs[0].bundledDir,'/bundled');assert.deepEqual(calls.tool,['zbarimg']);
+  await actions.info();assert.equal(calls.apps.length,1,'apps cached');assert.equal(calls.share,1);assert.equal(calls.tool.length,1);
+  clock.time+=61000;await actions.info();assert.equal(calls.apps.length,2,'apps refreshed after 60 s');assert.equal(calls.share,1,'availability cached for the process');
+},{...withFakes(),language:'tr'}));
+test('info uses the default folder when none is set',()=>fixture(async({actions,store,root})=>{
+  store.data.settings.output.saveFolder='';
+  assert.equal((await actions.info()).defaultFolder,path.join(root,'home','Pictures','Screenshots'));
+},withFakes()));
+test('run validates the action, item, app and languages',()=>fixture(async({actions,item,calls})=>{
+  await assert.rejects(actions.run({id:'nope',action:'copyLocation'}),/Invalid item selection/);
+  await assert.rejects(actions.run({id:item.id,action:'format'}),/Unknown output action/);
+  await assert.rejects(actions.run({id:item.id,action:'openWith'}),/not available/);
+  await assert.rejects(actions.run({id:item.id,action:'openWith',app:'../../x.desktop'}),/not available/);
+  await assert.rejects(actions.run({id:item.id,action:'extractText',languages:['eng','../x']}),/Invalid OCR languages/);
+  assert.deepEqual(await actions.run({id:item.id,action:'copyLocation'}),{needsSave:true});
+  assert.deepEqual(await actions.run({id:item.id,action:'reveal'}),{needsSave:true});
+  assert.deepEqual(await actions.run({id:item.id,action:'extractText',languages:['tur']}),{text:'Hallo'});assert.deepEqual(calls.ocr.at(-1)[1],['tur']);
+  await actions.run({id:item.id,action:'openWith',app:'b.desktop'});assert.equal(calls.spawn.length,1);
+  await actions.run({id:item.id,action:'print'});assert.equal(calls.print.length,1);
+  await actions.run({id:item.id,action:'share'});await actions.run({id:item.id,action:'scanCode'});assert.equal(calls.scan.length,1);
+  await assert.rejects(actions.plan('nope','save'),/Invalid item selection/);
+},withFakes()));
+test('ownsFile also recognises the real path behind a symlinked folder',async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'clipboardline-output-test-'));
+  try{
+    const real=path.join(root,'real');fs.mkdirSync(real);const link=path.join(root,'link');fs.symlinkSync(real,link);
+    await fixture(async({actions,item})=>{
+      const plan=await actions.plan(item.id,'save');const {path:file}=await actions.write(plan.token);
+      assert.ok(file.startsWith(link));assert.ok(actions.ownsFile(file));assert.ok(actions.ownsFile(path.join(real,path.basename(file))));
+    },{saveFolder:link});
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+test('a failed write is not remembered as owned',()=>fixture(async({actions,item,folder})=>{
+  const plan=await actions.plan(item.id,'save');fs.mkdirSync(folder,{recursive:true});fs.writeFileSync(plan.path,'x');
+  await assert.rejects(actions.write(plan.token));assert.ok(!actions.ownsFile(plan.path));
+}));
+test('prepareOcrLanguages copies bundled files and gzips system tessdata once',async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'clipboardline-output-test-'));
+  try{
+    const bundled=path.join(root,'eng.traineddata.gz');fs.writeFileSync(bundled,zlib.gzipSync(Buffer.from('ENG')));
+    const system=path.join(root,'deu.traineddata');fs.writeFileSync(system,'DEU-DATA');
+    const directory=path.join(root,'models');let listed=0;
+    const available=async()=>{listed++;return [{code:'eng',source:'bundled',file:bundled},{code:'deu',source:'system',file:system}];};
+    await O.prepareOcrLanguages({languages:['eng','deu'],directory,available});
+    assert.equal(zlib.gunzipSync(fs.readFileSync(path.join(directory,'eng.traineddata.gz'))).toString(),'ENG');
+    assert.equal(zlib.gunzipSync(fs.readFileSync(path.join(directory,'deu.traineddata.gz'))).toString(),'DEU-DATA');
+    assert.deepEqual(fs.readdirSync(directory).sort(),['deu.traineddata.gz','eng.traineddata.gz'],'no temp files left');
+    fs.writeFileSync(system,'CHANGED');
+    await O.prepareOcrLanguages({languages:['eng','deu'],directory,available});
+    assert.equal(listed,1,'existing files skip discovery');
+    assert.equal(zlib.gunzipSync(fs.readFileSync(path.join(directory,'deu.traineddata.gz'))).toString(),'DEU-DATA');
+    await assert.rejects(O.prepareOcrLanguages({languages:['fra'],directory,available}),/OCR language is not installed: fra/);
+    await assert.rejects(O.prepareOcrLanguages({languages:['../x'],directory,available}),/Invalid OCR language/);
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+test('announcer toasts when visible and notifies the desktop when hidden',()=>{
+  const toasts=[],shown=[],revealed=[];let visible=true;
+  class FakeNotification extends EventEmitter{static isSupported(){return true;}constructor(options){super();this.options=options;}show(){shown.push(this);}}
+  const announce=O.createAnnouncer({visible:()=>visible,toast:text=>toasts.push(text),Notification:FakeNotification,testMode:false,reveal:file=>revealed.push(file)});
+  announce('One',{file:'/x/a.png'});assert.deepEqual(toasts,['One']);assert.equal(shown.length,0);
+  visible=false;announce('Two',{file:'/x/b.png'});assert.equal(shown.length,1);
+  assert.deepEqual(shown[0].options,{title:'ClipBoardLine',body:'Two',silent:true});
+  shown[0].emit('click');assert.deepEqual(revealed,['/x/b.png']);
+  announce('Three');shown[1].emit('click');assert.deepEqual(revealed,['/x/b.png'],'no file, no reveal');
+  const quiet=O.createAnnouncer({visible:()=>false,toast:text=>toasts.push(text),Notification:FakeNotification,testMode:true,reveal:()=>{}});
+  quiet('Four');assert.equal(shown.length,2,'never a desktop notification in test mode');assert.equal(toasts.at(-1),'Four');
+  class Unsupported extends FakeNotification{static isSupported(){return false;}}
+  O.createAnnouncer({visible:()=>false,toast:text=>toasts.push(text),Notification:Unsupported,testMode:false,reveal:()=>{}})('Five');
+  assert.equal(shown.length,2);assert.equal(toasts.at(-1),'Five');
+});
+function fakeWindowClass(log,{loadFails=false,printResult=[true,'']}={}){
+  return class{constructor(options){this.options=options;log.windows.push(this);this.destroyed=false;
+      this.webContents={print:(options,callback)=>{log.print.push(options);setImmediate(()=>callback(...printResult));}};}
+    async loadFile(file){log.loaded.push(file);if(loadFails)throw new Error('load failed');}
+    destroy(){this.destroyed=true;}isDestroyed(){return this.destroyed;}};
+}
+test('printWithWindow loads a sandboxed script-free page beside the image',async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'clipboardline-output-test-'));
+  try{
+    const directory=path.join(root,'tmp');fs.mkdirSync(directory,{mode:0o700});const image=path.join(directory,'Shot "a" <b> #1.png');fs.writeFileSync(image,png);
+    const log={windows:[],print:[],loaded:[]};
+    assert.deepEqual(await O.printWithWindow(image,{BrowserWindow:fakeWindowClass(log),directory}),{printed:true});
+    const [win]=log.windows;
+    assert.equal(win.options.show,false);
+    assert.deepEqual(win.options.webPreferences,{sandbox:true,contextIsolation:true,nodeIntegration:false,javascript:false});
+    assert.ok(!('preload' in win.options.webPreferences));
+    assert.ok(win.destroyed,'window destroyed in the print callback');
+    assert.deepEqual(log.print,[{silent:false,printBackground:true}]);
+    const html=fs.readFileSync(log.loaded[0],'utf8');
+    assert.equal(path.dirname(log.loaded[0]),directory);assert.equal(fs.statSync(log.loaded[0]).mode&0o777,0o600);
+    assert.match(html,/max-width:100%;max-height:100vh;object-fit:contain/);assert.match(html,/@page\{margin:10mm\}/);
+    assert.ok(html.includes(require('node:url').pathToFileURL(image).href.replace(/&/g,'&amp;').replace(/"/g,'&quot;')));
+    assert.doesNotMatch(html,/<script/i);assert.ok(!html.includes('<b>'),'file name is escaped');
+    const cancelled={windows:[],print:[],loaded:[]};
+    assert.deepEqual(await O.printWithWindow(image,{BrowserWindow:fakeWindowClass(cancelled,{printResult:[false,'cancelled']}),directory}),{printed:false});
+    const failed={windows:[],print:[],loaded:[]};
+    await assert.rejects(O.printWithWindow(image,{BrowserWindow:fakeWindowClass(failed,{printResult:[false,'failed']}),directory}),/Printing failed/);
+    assert.ok(failed.windows[0].destroyed);
+    const broken={windows:[],print:[],loaded:[]};
+    await assert.rejects(O.printWithWindow(image,{BrowserWindow:fakeWindowClass(broken,{loadFails:true}),directory}),/load failed/);
+    assert.ok(broken.windows[0].destroyed,'window destroyed when loading fails');assert.equal(broken.print.length,0);
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
+});

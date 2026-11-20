@@ -5,13 +5,18 @@ const nodeFs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const zlib = require('node:zlib');
+const childProcess = require('node:child_process');
+const { pipeline } = require('node:stream/promises');
+const { pathToFileURL } = require('node:url');
+const desktopIntegration = require('./desktop-integration.cjs');
 
 const FORMATS = {
   png: { extension: '.png', mime: 'image/png' },
   jpg: { extension: '.jpg', mime: 'image/jpeg' },
   webp: { extension: '.webp', mime: 'image/webp' },
 };
-const TOKEN_LIFETIME = 120_000, OWN_LIFETIME = 30_000, TEMP_MAX_AGE = 3_600_000, MAX_NAME = 200, MAX_ATTEMPTS = 10000, MAX_DATA_URL = 90_000_000;
+const TOKEN_LIFETIME = 120_000, OWN_LIFETIME = 30_000, APPS_LIFETIME = 60_000, PREVIEW = 80, MAX_LANGUAGES = 16, TEMP_MAX_AGE = 3_600_000, MAX_NAME = 200, MAX_ATTEMPTS = 10000, MAX_DATA_URL = 90_000_000;
 
 function fail(message) { throw new Error(message); }
 
@@ -95,12 +100,80 @@ function outputText(language, key, ...values) {
   return entry[turkish ? 1 : 0].replace(/%(\d)/g, (_m, n) => String(values[Number(n) - 1] ?? ''));
 }
 
+const LANGUAGE_CODE = /^[a-z0-9_]{1,32}$/i;
+const exists = async (fs, file) => { try { await fs.access(file); return true; } catch { return false; } };
+
+// Puts <code>.traineddata.gz for every language into `directory` (tesseract.js langPath, gzip:true).
+// Bundled files are copied; system tessdata is gzip-compressed once. `available()` is asked only
+// when a file is missing, so the background index does no directory scans once the cache is warm.
+async function prepareOcrLanguages({ languages, directory, available, fs = nodeFs.promises }) {
+  await fs.mkdir(directory, { recursive: true });
+  let installed = null;
+  for (const code of languages) {
+    if (typeof code !== 'string' || !LANGUAGE_CODE.test(code)) fail('Invalid OCR language');
+    const destination = path.join(directory, code + '.traineddata.gz');
+    if (await exists(fs, destination)) continue;
+    installed ??= await available();
+    const entry = installed.find(language => language.code === code);
+    if (!entry) fail('OCR language is not installed: ' + code);
+    const temporary = destination + '.' + crypto.randomBytes(4).toString('hex') + '.tmp';
+    try {
+      if (entry.source === 'system') await pipeline(nodeFs.createReadStream(entry.file), zlib.createGzip(), nodeFs.createWriteStream(temporary, { flags: 'wx' }));
+      else await fs.copyFile(entry.file, temporary, nodeFs.constants.COPYFILE_EXCL);
+      await fs.rename(temporary, destination);
+    } catch (error) { await fs.rm(temporary, { force: true }).catch(() => {}); throw error; }
+  }
+}
+
+// Visible window → in-app toast; hidden → silent desktop notification whose click reveals the file.
+function createAnnouncer({ visible, toast, Notification, testMode, reveal }) {
+  return (text, { file } = {}) => {
+    if (visible() || testMode || !Notification?.isSupported?.()) return toast(text);
+    const notice = new Notification({ title: 'ClipBoardLine', body: text, silent: true });
+    if (file) notice.on('click', () => { try { reveal(file); } catch { /* ignore */ } });
+    notice.show();
+  };
+}
+
+const escapeHtml = value => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function printPage(file) {
+  return '<!doctype html><html><head><meta charset="utf-8"><title>' + escapeHtml(path.basename(file)) + '</title>'
+    + '<style>@page{margin:10mm}html,body{margin:0;padding:0;background:#fff}body{display:flex;align-items:center;justify-content:center;height:100vh}'
+    + 'img{display:block;max-width:100%;max-height:100vh;object-fit:contain}</style></head>'
+    + '<body><img src="' + escapeHtml(pathToFileURL(file).href) + '" alt=""></body></html>';
+}
+
+// Prints `file` through a hidden, sandboxed, script-free window and the system print dialog.
+// The HTML page is left in `directory` for the temp folder's age-based cleanup.
+async function printWithWindow(file, { BrowserWindow, directory, fs = nodeFs.promises }) {
+  const page = path.join(directory, path.basename(file, path.extname(file)) + '-' + crypto.randomBytes(3).toString('hex') + '.html');
+  await fs.writeFile(page, printPage(file), { flag: 'wx', mode: 0o600 });
+  const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, javascript: false } });
+  const destroy = () => { try { if (!win.isDestroyed()) win.destroy(); } catch { /* ignore */ } };
+  try { await win.loadFile(page); } catch (error) { destroy(); throw error; }
+  return new Promise((resolve, reject) => {
+    try {
+      win.webContents.print({ silent: false, printBackground: true }, (success, reason) => {
+        destroy();
+        if (success) resolve({ printed: true });
+        else if (reason === 'cancelled') resolve({ printed: false });
+        else reject(new Error('Printing failed' + (reason ? ': ' + reason : '')));
+      });
+    } catch (error) { destroy(); reject(error); }
+  });
+}
+
+const RUN_ACTIONS = new Set(['copyLocation', 'reveal', 'openWith', 'print', 'share', 'extractText', 'scanCode']);
+
 class OutputActions {
   constructor({ store, settings, fs = nodeFs.promises, now = () => new Date(), home, configHome, runtimeDir, language = () => 'en',
-    dialog, writeText, reveal, notify, integration = null, print = null, ocr = null } = {}) {
-    Object.assign(this, { store, settings, fs, now, home, configHome, runtimeDir, language, dialog, writeText, reveal, notify, integration, print, ocr });
+    dialog, writeText, reveal, notify, integration = desktopIntegration, print = null, ocr = null,
+    spawn = childProcess.spawn, assetsDir = path.join(__dirname, '..', 'assets'), env = process.env, ocrBundledDir = null, ocrSystemDirs } = {}) {
+    Object.assign(this, { store, settings, fs, now, home, configHome, runtimeDir, language, dialog, writeText, reveal, notify, integration, print, ocr,
+      spawn, assetsDir, env, ocrBundledDir, ocrSystemDirs });
     this.tokens = new Map();
     this.owned = new Map();
+    this.cache = new Map();
     this.tempDirectory = runtimeDir ? path.join(runtimeDir, 'clipboardline-output') : path.join(os.tmpdir(), 'clipboardline-output-' + process.getuid());
   }
 
@@ -144,8 +217,19 @@ class OutputActions {
     this.tokens.delete(token);
     if (!plan) fail('Unknown or used save token');
     if (this.time() > plan.expires) fail('The save token expired');
-    const { constants } = nodeFs;
     await this.fs.mkdir(path.dirname(plan.path), { recursive: true });
+    // Owned before the first byte lands, so a watched folder never imports this file.
+    const resolved = path.resolve(plan.path);
+    this.owned.set(resolved, this.time() + OWN_LIFETIME);
+    try { await this.writePlanned(plan, dataUrl); } catch (error) { this.owned.delete(resolved); throw error; }
+    try { const real = await this.fs.realpath(plan.path); if (real !== resolved) this.owned.set(real, this.time() + OWN_LIFETIME); } catch { /* best effort */ }
+    this.store.setSavedPath(plan.id, plan.path);
+    this.tell(this.say('saved', path.basename(plan.path), path.dirname(plan.path)), { file: plan.path });
+    return { path: plan.path };
+  }
+
+  async writePlanned(plan, dataUrl) {
+    const { constants } = nodeFs;
     if (plan.format === 'png' && dataUrl == null) {
       await this.fs.copyFile(this.store.mediaPath(plan.id), plan.path, plan.confirmed ? 0 : constants.COPYFILE_EXCL);
     } else {
@@ -157,10 +241,6 @@ class OutputActions {
       if (!matchesFormat(bytes, plan.format)) fail('The image data does not match the format');
       await this.fs.writeFile(plan.path, bytes, { flag: plan.confirmed ? 'w' : 'wx', mode: 0o644 });
     }
-    this.owned.set(path.resolve(plan.path), this.time() + OWN_LIFETIME);
-    this.store.setSavedPath(plan.id, plan.path);
-    this.tell(this.say('saved', path.basename(plan.path), path.dirname(plan.path)), { file: plan.path });
-    return { path: plan.path };
   }
 
   ownsFile(file) {
@@ -215,9 +295,134 @@ class OutputActions {
 
   suffix() { return crypto.randomBytes(3).toString('hex'); }
 
+  // Memoised lookups: `ttl` null = for the life of the process.
+  async cached(key, ttl, load) {
+    const hit = this.cache.get(key), time = this.time();
+    if (hit && (hit.until === null || hit.until > time)) return hit.value;
+    const value = load();
+    this.cache.set(key, { value, until: ttl === null ? null : time + ttl });
+    try { return await value; } catch (error) { this.cache.delete(key); throw error; }
+  }
+
+  uiLanguage() { return this.language() === 'tr' ? 'tr' : 'en'; }
+
+  apps() {
+    const language = this.uiLanguage();
+    return this.cached('apps:' + language, APPS_LIFETIME, () => this.integration.imageApps({ env: this.env, home: this.home, language }));
+  }
+
+  installedLanguages() {
+    const options = { bundledDir: this.ocrBundledDir, ...(this.ocrSystemDirs ? { systemDirs: this.ocrSystemDirs } : {}) };
+    return this.cached('languages', APPS_LIFETIME, () => this.integration.ocrLanguages(options));
+  }
+
+  shareAvailable() { return this.cached('share', null, () => this.integration.shareAvailable({ env: this.env })); }
+  codeAvailable() { return this.cached('zbarimg', null, () => this.integration.toolAvailable('zbarimg', this.env)); }
+
+  async info() {
+    const output = this.settings().output, language = this.uiLanguage();
+    const [defaultFolder, apps, languages, shareAvailable, codeAvailable] = await Promise.all([
+      output.saveFolder || defaultSaveFolder({ home: this.home, configHome: this.configHome }),
+      this.apps(), this.installedLanguages(), this.shareAvailable(), this.codeAvailable()]);
+    const installed = new Set(languages.map(entry => entry.code));
+    return {
+      defaultFolder, formats: Object.keys(FORMATS), format: FORMATS[output.format] ? output.format : 'png',
+      apps: apps.map(entry => ({ id: entry.id, name: entry.name })),
+      languages: languages.map(entry => ({ code: entry.code, name: entry.name?.[language] || entry.name?.en || entry.code })),
+      defaultLanguages: output.ocrLanguages.filter(code => installed.has(code)),
+      shareAvailable, codeAvailable,
+    };
+  }
+
+  async launch(command, args) {
+    const child = this.spawn(command, args, { detached: true, stdio: 'ignore' });
+    await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+    child.unref();
+  }
+
+  async openWith(id, appId) {
+    this.imageItem(id);
+    const entry = typeof appId === 'string' ? (await this.apps()).find(candidate => candidate.id === appId) : null;
+    if (!entry) fail('This application is not available for images');
+    const file = await this.externalFile(id);
+    const { command, args } = (this.integration.launchCommand || desktopIntegration.launchCommand)(entry.file, file);
+    await this.launch(command, args);
+    return { path: file };
+  }
+
+  async printImage(id) {
+    if (typeof this.print !== 'function') fail('Printing is unavailable');
+    this.imageItem(id);
+    return this.print(await this.externalFile(id));
+  }
+
+  async share(id) {
+    this.imageItem(id);
+    if (!(await this.shareAvailable())) fail('Sharing is unavailable');
+    const file = await this.externalFile(id);
+    await this.launch('qml6', [path.join(this.assetsDir, 'share.qml'), '--', file]);
+    return { path: file };
+  }
+
+  async ocrLanguageList(requested) {
+    const installed = new Set((await this.installedLanguages()).map(entry => entry.code));
+    if (requested === undefined) {
+      const list = this.settings().output.ocrLanguages.filter(code => installed.has(code));
+      if (!list.length) fail('No OCR language is installed');
+      return list;
+    }
+    if (!Array.isArray(requested) || requested.length < 1 || requested.length > MAX_LANGUAGES
+      || requested.some(code => typeof code !== 'string' || !LANGUAGE_CODE.test(code) || !installed.has(code))) fail('Invalid OCR languages');
+    return [...new Set(requested)];
+  }
+
+  async extractText(id, languages) {
+    this.imageItem(id);
+    if (typeof this.ocr !== 'function') fail('Text recognition is unavailable');
+    const list = await this.ocrLanguageList(languages);
+    const text = String((await this.ocr(id, list))?.text || '');
+    if (!text.trim()) { this.tell(this.say('noText')); return { text: '' }; }
+    await this.writeText(text);
+    this.tell(this.say('textCopied'));
+    return { text };
+  }
+
+  async scanCode(id) {
+    this.imageItem(id);
+    const file = await this.externalFile(id);
+    let scanned;
+    try { scanned = await this.integration.scanCodes(file, { env: this.env }); }
+    catch (error) {
+      const reason = error?.killed || error?.signal ? 'timed out' : String(error?.message || error).split('\n')[0].slice(0, 120);
+      fail('The QR code scan failed: ' + reason);
+    }
+    if (!scanned.available) fail('QR code scanning needs zbarimg (zbar) to be installed');
+    const codes = scanned.codes || [], texts = codes.filter(code => !code.binary && typeof code.text === 'string');
+    if (texts.length) {
+      const first = texts[0].text, flat = first.replace(/\s+/g, ' ').trim();
+      const preview = flat.length > PREVIEW ? flat.slice(0, PREVIEW - 1) + '…' : flat;
+      await this.writeText(first);
+      this.tell(codes.length > 1 ? this.say('codesFound', codes.length, preview) : this.say('codeFound', preview));
+    } else this.tell(this.say(codes.length ? 'codeBinary' : 'noCode'));
+    return { codes };
+  }
+
+  // Single entry for the renderer's outputRun command; every argument is validated here.
+  async run({ id, action, app, languages } = {}) {
+    this.store.item(id);
+    if (!RUN_ACTIONS.has(action)) fail('Unknown output action');
+    if (action === 'copyLocation') return this.copyLocation(id);
+    if (action === 'reveal') return this.revealSaved(id);
+    if (action === 'openWith') return this.openWith(id, app);
+    if (action === 'print') return this.printImage(id);
+    if (action === 'share') return this.share(id);
+    if (action === 'extractText') return this.extractText(id, languages);
+    return this.scanCode(id);
+  }
+
   async cleanup() {
     await this.fs.rm(this.tempDirectory, { recursive: true, force: true });
   }
 }
 
-module.exports = { FORMATS, formatFromExtension, matchesFormat, fileBaseName, uniqueOutputPath, defaultSaveFolder, outputText, OutputActions };
+module.exports = { FORMATS, formatFromExtension, matchesFormat, fileBaseName, uniqueOutputPath, defaultSaveFolder, outputText, prepareOcrLanguages, createAnnouncer, printPage, printWithWindow, OutputActions };

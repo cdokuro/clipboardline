@@ -31,6 +31,7 @@ const {ImageSearch,modelPaths}=require('./lib/image-search.cjs');
 const {StatusTray,trayIcon,translated}=require('./lib/status-summary.cjs');
 const {WindowBounds}=require('./lib/window-bounds.cjs');
 const {MotionBridge}=require('./lib/shelf-motion.cjs');
+const {OutputActions,prepareOcrLanguages,createAnnouncer,printWithWindow}=require('./lib/output-actions.cjs');
 const BUILD_NUMBER=Number(require('./package.json').clipboardLineBuild)||63;
 const testMode = process.argv.includes('--test-mode');
 const testFolder = process.argv.find(value=>value.startsWith('--test-data='))?.slice('--test-data='.length);
@@ -61,7 +62,7 @@ const copyMarker = crypto.randomBytes(16);
 const pending = new Map();
 const ocrJobs=new Map(),ocrQueue=[];let indexing=false;
 const mediaDiagnostics=[];
-let imageSearch,imageSearchTimer,dragFiles,mediaJobs;
+let imageSearch,imageSearchTimer,dragFiles,mediaJobs,output;
 const recordingTrims=new Map();
 function cancelRecordingTrims(){for(const controller of recordingTrims.values())controller.abort();}
 function cancelNativePaste(){native.cancelPaste();cancelFileCopies();}
@@ -89,6 +90,8 @@ function broadcast({surfaceOnly=false}={}) {
   return packet;
 }
 function notify(text) { message=text;broadcast(); }
+// Output-action feedback: toast while the window is up, desktop notification while hidden.
+const announce=createAnnouncer({visible:()=>desiredVisible&&!!window?.isVisible(),toast:notify,Notification,testMode,reveal:file=>shell.showItemInFolder(file)});
 function openUpdates(){return show('settings',{settingsTab:'updates'});}
 function refreshTray(){
   if(closing||!tray||tray.isDestroyed()||!trayPresentation||!store)return;
@@ -501,20 +504,22 @@ async function capture() {
   }catch(error){if(wasVisible)await show(view);throw error;}
 }
 function queueOCR(id){if(testMode||!store.data.settings.indexImages||ocrQueue.includes(id)||ocrQueue.length>=64)return;ocrQueue.push(id);if(indexing)return;indexing=true;setImmediate(async()=>{try{while(ocrQueue.length&&!closing){const next=ocrQueue.shift(),item=store.data.items.find(i=>i.id===next);if(!item||item.trashedAt||item.ocrText)continue;const fingerprint=item.renderedFile||item.imageFile;try{await ocr(next,true);}catch{}if(store.data.items.includes(item)&&(item.renderedFile||item.imageFile)!==fingerprint&&!ocrQueue.includes(next))ocrQueue.push(next);}}finally{indexing=false;}});}
-async function ocr(id,quiet=false){if(ocrJobs.has(id))return ocrJobs.get(id);const promise=recognize(id,quiet);ocrJobs.set(id,promise);try{return await promise;}finally{ocrJobs.delete(id);}}
-async function recognize(id,quiet=false) {
+const INDEX_LANGUAGES=['eng','tur'];
+async function ocr(id,quiet=false,languages=INDEX_LANGUAGES){const key=id+':'+languages.join('+');if(ocrJobs.has(key))return ocrJobs.get(key);const promise=recognize(id,quiet,languages);ocrJobs.set(key,promise);try{return await promise;}finally{ocrJobs.delete(key);}}
+// Bundled tessdata: packaged resources/ocr-data, or node_modules/@tesseract.js-data in a source checkout.
+const bundledOcrDirectory=()=>app.isPackaged?path.join(process.resourcesPath,'ocr-data'):path.join(__dirname,'node_modules','@tesseract.js-data');
+async function recognize(id,quiet=false,languages=INDEX_LANGUAGES) {
   const item=store.item(id);if(item.kind!=='image'||item.recording)throw new Error('OCR requires a still image');
   const file=store.mediaPath(id);const fingerprint=item.renderedFile||item.imageFile;
-  if(item.ocrText)return{text:item.ocrText,id};
+  // Only the background index languages (eng+tur) read and fill the item.ocrText cache.
+  const cacheable=languages.join('+')===INDEX_LANGUAGES.join('+');
+  if(cacheable&&item.ocrText)return{text:item.ocrText,id};
   if(!quiet)notify('Recognizing image text locally…');
   const {createWorker}=require('tesseract.js');
-  const languageDirectory=path.join(store.directory,'ocr-models');fs.mkdirSync(languageDirectory,{recursive:true});
-  for(const language of ['eng','tur']) {
-    const source=app.isPackaged?path.join(process.resourcesPath,'ocr-data',language,'4.0.0_best_int',language+'.traineddata.gz'):path.join(__dirname,'node_modules','@tesseract.js-data',language,'4.0.0_best_int',language+'.traineddata.gz');
-    const destination=path.join(languageDirectory,language+'.traineddata.gz');if(!fs.existsSync(destination))fs.copyFileSync(source,destination);
-  }
-  const worker=await createWorker(['eng','tur'],1,{langPath:languageDirectory,cachePath:languageDirectory,gzip:true});
-  try{let image=nativeImage.createFromPath(file);const size=image.getSize(),scale=Math.min(1,2400/Math.max(size.width,size.height));if(scale<1)image=image.resize({width:Math.round(size.width*scale),height:Math.round(size.height*scale)});const result=await worker.recognize(image.toPNG());if(!store.data.items.includes(item)||(item.renderedFile||item.imageFile)!==fingerprint)throw new Error('Image changed during recognition');item.ocrText=String(result.data.text||'').slice(0,1024*1024);store.persist();if(!quiet)notify(item.ocrText?'Image text ready':'No text found');else broadcast();return{text:item.ocrText,id};}
+  const languageDirectory=path.join(store.directory,'ocr-models');
+  await prepareOcrLanguages({languages,directory:languageDirectory,available:()=>output.installedLanguages()});
+  const worker=await createWorker(languages,1,{langPath:languageDirectory,cachePath:languageDirectory,gzip:true});
+  try{let image=nativeImage.createFromPath(file);const size=image.getSize(),scale=Math.min(1,2400/Math.max(size.width,size.height));if(scale<1)image=image.resize({width:Math.round(size.width*scale),height:Math.round(size.height*scale)});const result=await worker.recognize(image.toPNG());if(!store.data.items.includes(item)||(item.renderedFile||item.imageFile)!==fingerprint)throw new Error('Image changed during recognition');const text=String(result.data.text||'').slice(0,1024*1024);if(!cacheable)return{text,id};item.ocrText=text;store.persist();if(!quiet)notify(item.ocrText?'Image text ready':'No text found');else broadcast();return{text:item.ocrText,id};}
   finally{await worker.terminate();}
 }
 function configureWatchers() {
@@ -522,7 +527,7 @@ function configureWatchers() {
   const home=require('node:os').homedir();
   const defaultDirs=process.platform==='linux'?[path.join(home,'Pictures','Screenshots'),path.join(home,'Resimler','Ekran Görüntüleri'),path.join(home,'Resimler','Screenshots')]:[];
   const folders=[...new Set([...store.data.settings.watchFolders,...defaultDirs.filter(d=>{try{return fs.statSync(d).isDirectory();}catch{return false;}})])];
-  for(const folder of folders){try{if(!fs.statSync(folder).isDirectory())continue;const timers=new Map();const watcher=fs.watch(folder,(_event,name)=>{if(!name||!/[.](png|jpe?g|webp|bmp|mov|mp4)$/i.test(name)||name.startsWith('.'))return;clearTimeout(timers.get(name));timers.set(name,setTimeout(()=>{timers.delete(name);try{const file=path.join(folder,path.basename(name));const item=importFile(file);Promise.resolve(item).then(record=>{broadcast();if(store.data.settings.openAfterScreenshot)void show('shelves',{selectId:record.id,kind:'image',freshlyCaptured:true});}).catch(()=>{});}catch{}},700));});watcher.on('error',()=>{});watchers.push(watcher);}catch{}}
+  for(const folder of folders){try{if(!fs.statSync(folder).isDirectory())continue;const timers=new Map();const watcher=fs.watch(folder,(_event,name)=>{if(!name||!/[.](png|jpe?g|webp|bmp|mov|mp4)$/i.test(name)||name.startsWith('.'))return;clearTimeout(timers.get(name));timers.set(name,setTimeout(()=>{timers.delete(name);try{const file=path.join(folder,path.basename(name));if(output?.ownsFile(file))return;const item=importFile(file);Promise.resolve(item).then(record=>{broadcast();if(store.data.settings.openAfterScreenshot)void show('shelves',{selectId:record.id,kind:'image',freshlyCaptured:true});}).catch(()=>{});}catch{}},700));});watcher.on('error',()=>{});watchers.push(watcher);}catch{}}
 }
 let shortcutRegistry,shortcutRecording=null;
 function finishShortcutRecording(token=null){
@@ -591,7 +596,7 @@ async function command(action,payload={}) {
   else if(action==='openLink'){const item=store.item(payload.id);const url=plainURL(item.url);if(item.kind!=='link'||!url)throw new Error('Link unavailable');await shell.openExternal(url);}
   else if(action==='openFile'||action==='revealFile'){
     const item=store.item(payload.id);if(item.kind!=='image')throw new Error('Select an image first.');
-    const file=store.mediaPath(item.id);if(action==='revealFile')shell.showItemInFolder(file);else {const failure=await shell.openPath(file);if(failure)throw new Error('The image could not be opened.');}
+    const file=store.mediaPath(item.id);if(action==='revealFile')shell.showItemInFolder(await output.savedFile(item.id)||file);else {const failure=await shell.openPath(file);if(failure)throw new Error('The image could not be opened.');}
   }
   else if(action==='refreshLink'){
     const item=store.item(payload.id);if(item.kind!=='link')throw new Error('Select a link first.');
@@ -612,10 +617,14 @@ async function command(action,payload={}) {
       finalBuffer=pendingCapture.buffer;
     }else throw new Error('No active screen capture.');
     pendingCapture=null;
+    // copy:false = an output action (Save, Print, …) runs on the stored item next; no clipboard, beep or copied mark.
+    const copyToClipboard=payload.copy!==false;
     // User-visible part first: the rendered PNG on the clipboard (marked as our
     // own write, so its echo is not imported) and the window hidden.
-    await writeImageClipboard(finalBuffer).catch(()=>{});
-    if(store.data.settings.sounds)shell.beep();
+    if(copyToClipboard){
+      await writeImageClipboard(finalBuffer).catch(()=>{});
+      if(store.data.settings.sounds)shell.beep();
+    }
     // Kaydedince ClipBoardLine öne gelmesin: gizle ve odağı önceki uygulamaya ver
     await hide();
     // Then the Library item: annotated captures are editable documents (always new).
@@ -632,9 +641,9 @@ async function command(action,payload={}) {
         const whole=rect.x===0&&rect.y===0&&rect.width===size.width&&rect.height===size.height;
         item=store.insertAnnotatedImage(whole?screenshot:source.crop(rect).toPNG(),finalBuffer,annotations);
       }else item=store.insert('image',finalBuffer);
-      store.markCopied([item.id]);
+      if(copyToClipboard)store.markCopied([item.id]);
       queueOCR(item.id);refreshImageSearch();
-    }catch(error){notify('Screenshot copied, but it could not be saved to the Library: '+(error?.message||error));}
+    }catch(error){notify((copyToClipboard?'Screenshot copied, but it':'The screenshot')+' could not be saved to the Library: '+(error?.message||error));}
     result={id:item?.id??null};
   }
   else if(action==='cancelCapture'){
@@ -646,6 +655,10 @@ async function command(action,payload={}) {
   else if(action==='import'){const response=await dialog.showOpenDialog(window,{properties:['openFile','multiSelections'],filters:[{name:'Images, recordings and text',extensions:['png','jpg','jpeg','webp','bmp','mov','mp4','txt','md']}]});const imported=[];for(const file of response.filePaths){const item=await importFile(file);imported.push(item.id);if(item.kind==='link')void enrich(item.id);}result={ids:imported};}
   else if(action==='searchImages'){if(!imageSearch)throw new Error('Offline image search is unavailable.');result=await imageSearch.search(payload.query,payload.eligibleIds);}
   else if(action==='ocr')result=await ocr(payload.id);
+  else if(action==='outputInfo')result=await output.info();
+  else if(action==='outputPlan')result=await output.plan(payload.id,payload.mode);
+  else if(action==='outputWrite'){if(typeof payload.token!=='string')throw new Error('Invalid save token');result=await output.write(payload.token,payload.dataUrl??null);}
+  else if(action==='outputRun')result=await output.run({id:payload.id,action:payload.action,app:payload.app,languages:payload.languages});
   else if(action==='copyOCR'){const recognized=await ocr(payload.id);if(!recognized.text.trim())throw new Error('No text found in this image.');await writeClipboard([{kind:'text',text:recognized.text}]);result=recognized;notify('Recognized text copied');}
   else if(action==='export'){
     const selected=store.selected(ids(payload.ids));if(!selected.length)throw new Error('Select an item first');
@@ -694,7 +707,16 @@ function appIcon(){
 }
 if(!app.requestSingleInstanceLock())app.quit();
 else app.whenReady().then(async()=>{
-  store=new Store(app.getPath('userData'));mediaJobs=new MediaJobs({directory:path.join(store.directory,'media-jobs')});try{dragFiles=new DragFiles(store.directory);}catch{}updates=new Updates(path.join(store.directory,'updates'),{build:BUILD_NUMBER,version:app.getVersion(),changed:()=>broadcast(),available:updateAvailable});
+  store=new Store(app.getPath('userData'));
+  output=new OutputActions({store,settings:()=>store.data.settings,home:require('node:os').homedir(),configHome:process.env.XDG_CONFIG_HOME||path.join(require('node:os').homedir(),'.config'),
+    runtimeDir:process.env.XDG_RUNTIME_DIR,assetsDir:path.join(__dirname,'assets'),ocrBundledDir:bundledOcrDirectory(),
+    language:()=>{const value=store.data.settings.language||'system';return /^tr/i.test(value==='system'?app.getLocale():value)?'tr':'en';},
+    dialog:{showSaveDialog:options=>desiredVisible&&window?.isVisible()?dialog.showSaveDialog(window,options):dialog.showSaveDialog(options)},
+    writeText:text=>writeMarkedClipboard({'text/plain':new Blob([text],{type:'text/plain'})}),
+    reveal:file=>shell.showItemInFolder(file),notify:announce,
+    print:file=>printWithWindow(file,{BrowserWindow,directory:output.tempDirectory}),
+    ocr:(id,languages)=>ocr(id,true,languages)});
+  mediaJobs=new MediaJobs({directory:path.join(store.directory,'media-jobs')});try{dragFiles=new DragFiles(store.directory);}catch{}updates=new Updates(path.join(store.directory,'updates'),{build:BUILD_NUMBER,version:app.getVersion(),changed:()=>broadcast(),available:updateAvailable});
   updateScheduler=new AutomaticUpdateScheduler(updates,{enabled:()=>!development&&!testMode&&store.data.settings.autoCheckUpdates});
   const searchPaths=modelPaths({packaged:app.isPackaged,resourcesPath:process.resourcesPath,sourceDirectory:__dirname});
   let ortModule=null,runtimeDirectory=null;try{ortModule=require.resolve('onnxruntime-web/wasm').replace(/app[.]asar([\\/])/,'app.asar.unpacked$1');runtimeDirectory=path.dirname(ortModule);}catch{}
@@ -784,4 +806,4 @@ app.on('second-instance',(_event,commandLine)=>{
   }
 });
 app.on('activate',()=>{if(window)void show('shelves');});
-app.on('before-quit',()=>{closing=true;visibilityGeneration++;shelfMotion.cancel();trayPresentation?.dispose();tray?.destroy();cancelRecordingTrims();mediaJobs?.dispose();dragFiles?.dispose();clearTimeout(imageSearchTimer);void imageSearch?.stop();clearInterval(clipboardTimer);clearInterval(retentionTimer);clearInterval(updateTimer);clearTimeout(updateLaunchTimer);monitor?.kill();watchers.forEach(w=>w.close());shortcutRegistry?.dispose();globalShortcut.unregisterAll();});
+app.on('before-quit',()=>{closing=true;void output?.cleanup();visibilityGeneration++;shelfMotion.cancel();trayPresentation?.dispose();tray?.destroy();cancelRecordingTrims();mediaJobs?.dispose();dragFiles?.dispose();clearTimeout(imageSearchTimer);void imageSearch?.stop();clearInterval(clipboardTimer);clearInterval(retentionTimer);clearInterval(updateTimer);clearTimeout(updateLaunchTimer);monitor?.kill();watchers.forEach(w=>w.close());shortcutRegistry?.dispose();globalShortcut.unregisterAll();});

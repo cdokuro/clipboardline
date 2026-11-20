@@ -58,3 +58,22 @@ test('annotated commit: clipboard and hide never wait for the original PNG',()=>
  assert.match(branch,/store\.insertAnnotatedImage\([^;]*\.crop\(rect\)\.toPNG\(\),finalBuffer,annotations\)/,'one new item gets original + rendered + annotations');
  assert.ok(branch.search(/pendingCapture\?\.buffer/)<branch.indexOf('pendingCapture=null'),'the screenshot buffer is kept before the capture is cleared');
 });
+
+test('copy:false commits without clipboard, beep or markCopied; default path still copies before hide',()=>{
+ const branch=commitCaptureBranch();
+ assert.match(branch,/const copyToClipboard=payload\.copy!==false;/,'copy:false is the only way to skip the clipboard');
+ const guard=branch.indexOf('if(copyToClipboard){'),write=branch.search(/await writeImageClipboard\(finalBuffer\)/),beep=branch.indexOf('shell.beep()'),hidden=branch.indexOf('await hide()');
+ assert.ok(guard>0&&guard<write&&write<beep&&beep<hidden,'clipboard write and beep are guarded and still precede hide');
+ assert.match(branch,/if\(copyToClipboard\)\{\s*await writeImageClipboard\(finalBuffer\)\.catch\(\(\)=>\{\}\);\s*if\(store\.data\.settings\.sounds\)shell\.beep\(\);\s*\}/,'clipboard write and beep are both inside the guard');
+ assert.match(branch,/if\(copyToClipboard\)store\.markCopied\(\[item\.id\]\)/);
+ assert.match(branch,/result=\{id:item\?\.id\?\?null\}/);
+});
+
+test('output wiring: commands, watcher suppression, saved-path reveal and quit cleanup',()=>{
+ const src=fs.readFileSync(path.join(__dirname,'../main.cjs'),'utf8');
+ for(const name of ['outputInfo','outputPlan','outputWrite','outputRun'])assert.ok(src.includes(`action==='${name}'`),name);
+ assert.match(src,/if\(output\?\.ownsFile\(file\)\)return;/);
+ assert.match(src,/await output\.savedFile\(item\.id\)/);
+ assert.match(src,/void output\?\.cleanup\(\)/);
+ assert.doesNotMatch(src,/copyFileSync|mkdirSync\(languageDirectory/,'OCR language files are prepared asynchronously');
+});
