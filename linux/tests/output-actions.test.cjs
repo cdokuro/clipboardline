@@ -138,3 +138,23 @@ test('outputText resolves Turkish',()=>{
   assert.equal(O.outputText('en','saved','a.png','/x'),'Saved as a.png to /x');
   assert.equal(O.outputText('tr','saved','a.png','/x'),'a.png olarak /x klasörüne kaydedildi');
 });
+test('saveAs never overwrites a file the dialog did not confirm',()=>fixture(async({actions,item,state,folder})=>{
+  fs.mkdirSync(folder,{recursive:true});fs.writeFileSync(path.join(folder,'shot.png'),'old');
+  for(const name of ['shot','shot.gif']){
+    state.dialogResult={canceled:false,filePath:path.join(folder,name)};
+    const plan=await actions.plan(item.id,'saveAs');assert.equal(plan.path,path.join(folder,name==='shot'?'shot.png':'shot.gif.png'));
+    if(name==='shot')await assert.rejects(actions.write(plan.token));
+    assert.equal(fs.readFileSync(path.join(folder,'shot.png'),'utf8'),'old');
+  }
+}));
+test('externalFile refuses an unsafe temp folder',()=>fixture(async({actions,item,runtimeDir})=>{
+  const temp=path.join(runtimeDir,'clipboardline-output');fs.mkdirSync(temp,{mode:0o700});fs.chmodSync(temp,0o777);
+  await assert.rejects(actions.externalFile(item.id));
+  fs.rmSync(temp,{recursive:true});fs.mkdirSync(path.join(runtimeDir,'elsewhere'));fs.symlinkSync(path.join(runtimeDir,'elsewhere'),temp);
+  await assert.rejects(actions.externalFile(item.id));
+}));
+test('externalFile names are unique per call',()=>fixture(async({actions,item,store})=>{
+  const other=Buffer.from(png);other[other.length-1]^=1;const second=store.insert('image',other);
+  const a=await actions.externalFile(item.id),b=await actions.externalFile(second.id);
+  assert.notEqual(a,b);assert.match(path.basename(a),/-[0-9a-f]{6}\.png$/);
+}));

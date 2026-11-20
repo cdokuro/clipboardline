@@ -128,10 +128,10 @@ class OutputActions {
         filters: [{ name: 'PNG', extensions: ['png'] }, { name: 'JPEG', extensions: ['jpg', 'jpeg'] }, { name: 'WebP', extensions: ['webp'] }],
       });
       if (!result || result.canceled || !result.filePath) return { canceled: true };
-      file = path.resolve(result.filePath);
+      file = result.filePath;
       const chosen = formatFromExtension(path.extname(file));
-      if (chosen) format = chosen; else file += FORMATS[format].extension;
-      confirmed = true;
+      // Only the exact path the user confirmed in the dialog may be overwritten.
+      if (chosen) { format = chosen; confirmed = true; } else file += FORMATS[format].extension;
     }
     const token = crypto.randomUUID();
     this.tokens.set(token, { id, path: file, format, quality: output.quality, confirmed, expires: this.time() + TOKEN_LIFETIME });
@@ -192,6 +192,8 @@ class OutputActions {
   async externalFile(id) {
     const item = this.imageItem(id), saved = await this.savedFile(id);
     await this.fs.mkdir(this.tempDirectory, { recursive: true, mode: 0o700 });
+    const info = await this.fs.lstat(this.tempDirectory);
+    if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid() || (info.mode & 0o077) !== 0) fail('The temporary folder is not private');
     try {
       const cutoff = Date.now() - TEMP_MAX_AGE; // file mtimes are wall-clock, not the injected clock
       for (const name of await this.fs.readdir(this.tempDirectory)) {
@@ -200,7 +202,7 @@ class OutputActions {
       }
     } catch { /* ignore */ }
     if (saved) return saved;
-    const name = fileBaseName(this.settings().output.filenameTemplate, this.now(), { title: item.name || item.title || '' }) + '.png';
+    const name = fileBaseName(this.settings().output.filenameTemplate, this.now(), { title: item.name || item.title || '' }) + '-' + crypto.randomBytes(3).toString('hex') + '.png';
     const file = path.join(this.tempDirectory, name);
     await this.fs.copyFile(this.store.mediaPath(id), file);
     await this.fs.chmod(file, 0o600);
