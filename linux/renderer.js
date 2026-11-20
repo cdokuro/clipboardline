@@ -609,29 +609,32 @@ function captureCanvasPoint(event){
 function captureCrop(session){const crop=session.doc.crop;return crop&&crop.width>=8&&crop.height>=8?crop:null;}
 function captureClip(session,width,height){return captureCrop(session)||{x:0,y:0,width,height};}
 function stepCaptureHistory(redo=false){const session=ui.captureSession;if(session)session.keyNudge=false;if(session&&(redo?annotationEngine.redo:annotationEngine.undo)(session.doc))render();}
+// Same shift as a select-tool move: x/y and every pen/marker point.
+function offsetCaptureAnnotations(annotations,dx,dy){return annotations.map(value=>{const a=JSON.parse(JSON.stringify(value));if(Number.isFinite(a.x))a.x-=dx;if(Number.isFinite(a.y))a.y-=dy;if(Array.isArray(a.points))a.points=a.points.map(p=>({x:p.x-dx,y:p.y-dy}));return a;});}
 async function commitCaptureSession(){
  const session=ui.captureSession;if(!session||session.busy)return;
  session.busy=true;
  try{
-  let dataUrl=session.dataUrl;
+  let dataUrl=session.dataUrl,extra={};
   const width=session.base?.naturalWidth||session.width,height=session.base?.naturalHeight||session.height;
   const crop=captureCrop(session),annotations=session.doc.annotations;
   if(session.base?.complete&&session.base.naturalWidth&&(crop||annotations.length)){
    const full=document.createElement('canvas');full.width=width;full.height=height;
    const c=full.getContext('2d');c.drawImage(session.base,0,0,width,height);
    annotationEngine.drawAnnotations(c,annotations,{base:session.base,clip:captureClip(session,width,height)});
-   if(crop){
-    const rx=Math.max(0,Math.round(crop.x)),ry=Math.max(0,Math.round(crop.y));
-    const rw=Math.max(1,Math.min(width-rx,Math.round(crop.width))),rh=Math.max(1,Math.min(height-ry,Math.round(crop.height)));
-    const cropped=document.createElement('canvas');cropped.width=rw;cropped.height=rh;
-    cropped.getContext('2d').drawImage(full,rx,ry,rw,rh,0,0,rw,rh);
-    dataUrl=cropped.toDataURL('image/png');
-   }else{
-    dataUrl=full.toDataURL('image/png');
+   const rx=crop?Math.max(0,Math.round(crop.x)):0,ry=crop?Math.max(0,Math.round(crop.y)):0;
+   const rw=crop?Math.max(1,Math.min(width-rx,Math.round(crop.width))):width,rh=crop?Math.max(1,Math.min(height-ry,Math.round(crop.height))):height;
+   const region=source=>{if(!crop)return source;const out=document.createElement('canvas');out.width=rw;out.height=rh;out.getContext('2d').drawImage(source,rx,ry,rw,rh,0,0,rw,rh);return out;};
+   dataUrl=region(full).toDataURL('image/png');
+   // Editable document: the clean (cropped) base plus annotations in its coordinates.
+   if(annotations.length){
+    const original=document.createElement('canvas');original.width=rw;original.height=rh;
+    original.getContext('2d').drawImage(session.base,rx,ry,rw,rh,0,0,rw,rh);
+    extra={originalDataUrl:original.toDataURL('image/png'),annotations:offsetCaptureAnnotations(annotations,rx,ry)};
    }
   }
   ui.captureSession=null;
-  await command('commitCapture',{dataUrl});
+  await command('commitCapture',{dataUrl,...extra});
  }catch(error){
   if(ui.captureSession===session)session.busy=false;
   toast(error?.message||'Screenshot could not be saved.');

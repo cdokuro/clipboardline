@@ -390,16 +390,26 @@ async function writeClipboard(selected) {
     await native.copyImages({files:images.map(item=>store.mediaPath(item.id)),marker:copyMarker.toString('base64'),text:values.join('\n\n')});
     ownFingerprint=(await clipboardContent())?.fingerprint||'';lastFingerprint=ownFingerprint;store.markCopied(selected.filter(item=>store.data.items.includes(item)).map(item=>item.id));return;
   }
-  const data={'web application/x.clipboardline':new Blob([copyMarker])};
-  data['application/x-orkun-origin'] = new Blob([JSON.stringify({app: 'clipboardline'})], {type: 'application/x-orkun-origin'});
+  const data={};
   if(values.length)data['text/plain']=new Blob([values.join('\n\n')],{type:'text/plain'});
   if(selected.length===1&&selected[0].html){
     data['text/html']=new Blob([selected[0].html],{type:'text/html'});
   }
-  if(images.length){const image=nativeImage.createFromPath(store.mediaPath(images[0].id));if(image.isEmpty())throw new Error('Image unavailable');data['image/png']=new Blob([image.toPNG()],{type:'image/png'});}
-  await clipboard.write([new ClipboardItem(data)]);
-  ownFingerprint=(await clipboardContent())?.fingerprint||'';lastFingerprint=ownFingerprint;store.markCopied(selected.filter(item=>store.data.items.includes(item)).map(item=>item.id));
+  if(images.length){const image=nativeImage.createFromPath(store.mediaPath(images[0].id));if(image.isEmpty())throw new Error('Image unavailable');await writeImageClipboard(image.toPNG(),data);}
+  else await writeMarkedClipboard(data);
+  store.markCopied(selected.filter(item=>store.data.items.includes(item)).map(item=>item.id));
 }
+// Every clipboard write carries copyMarker and records its fingerprint, so the
+// daemon's echo of our own write is recognised and never imported again.
+async function writeMarkedClipboard(flavours){
+  const data={'web application/x.clipboardline':new Blob([copyMarker])};
+  data['application/x-orkun-origin'] = new Blob([JSON.stringify({app: 'clipboardline'})], {type: 'application/x-orkun-origin'});
+  Object.assign(data,flavours);
+  await clipboard.write([new ClipboardItem(data)]);
+  ownFingerprint=(await clipboardContent())?.fingerprint||'';lastFingerprint=ownFingerprint;
+}
+// A PNG that need not be a Library item yet (capture commit copies before storing).
+async function writeImageClipboard(png,flavours={}){await writeMarkedClipboard({...flavours,'image/png':new Blob([png],{type:'image/png'})});}
 async function copy(payload,paste=false) {
   if(pastePromise)return pastePromise;
   const selected=store.selected(ids(payload.ids));
@@ -602,13 +612,26 @@ async function command(action,payload={}) {
       finalBuffer=pendingCapture.buffer;
     }else throw new Error('No active screen capture.');
     pendingCapture=null;
-    const item=store.insert('image',finalBuffer);
-    await writeClipboard([item]).catch(()=>{});
+    // User-visible part first: the rendered PNG on the clipboard (marked as our
+    // own write, so its echo is not imported) and the window hidden.
+    await writeImageClipboard(finalBuffer).catch(()=>{});
     if(store.data.settings.sounds)shell.beep();
-    queueOCR(item.id);refreshImageSearch();
     // Kaydedince ClipBoardLine öne gelmesin: gizle ve odağı önceki uygulamaya ver
     await hide();
-    result={id:item.id};
+    // Then the Library item: annotated captures are editable documents (always new).
+    let item=null;
+    try{
+      const annotations=Array.isArray(payload.annotations)&&payload.annotations.length?payload.annotations:null;
+      if(annotations){
+        if(typeof payload.originalDataUrl!=='string'||!payload.originalDataUrl.startsWith('data:image/png;base64,')||payload.originalDataUrl.length>90_000_000)throw new Error('Invalid original image');
+        const original=nativeImage.createFromDataURL(payload.originalDataUrl);
+        if(original.isEmpty()||original.getSize().width*original.getSize().height>80_000_000)throw new Error('Invalid original image');
+        item=store.insertAnnotatedImage(original.toPNG(),finalBuffer,annotations);
+      }else item=store.insert('image',finalBuffer);
+      store.markCopied([item.id]);
+      queueOCR(item.id);refreshImageSearch();
+    }catch(error){notify('Screenshot copied, but it could not be saved to the Library: '+(error?.message||error));}
+    result={id:item?.id??null};
   }
   else if(action==='cancelCapture'){
     pendingCapture=null;

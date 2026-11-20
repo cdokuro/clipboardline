@@ -250,7 +250,7 @@ class Store {
     else textValue = text(value);
     const identity=kind==='text'?textIdentity(textValue):null;
     const matching = this.data.items.filter(i => i.kind === kind && !i.trashedAt &&
-      (kind === 'text' ? this.textIdentity(i) === identity : kind === 'link' ? i.url === url : !i.recording&&i.imageFile === imageFile));
+      (kind === 'text' ? this.textIdentity(i) === identity : kind === 'link' ? i.url === url : !i.recording&&!i.annotations?.length&&i.imageFile === imageFile));
     const prior = matching.sort((a, b) => b.updatedAt - a.updatedAt)[0];
     if(!prior&&this.data.items.length>=20000)fail('Library item limit reached');
     const now = this.clock();
@@ -268,6 +268,18 @@ class Store {
       const dates=matching.map(i=>i.retainedAt).filter(Number.isFinite);if(dates.length)item.retainedAt=Math.min(...dates);
     }
     this.data.items = [item, ...this.data.items.filter(i => i.id !== item.id && !matching.includes(i))];
+    this.expire(false); this.persist(); return item;
+  }
+  // A capture with annotations is an editable document: always a new item (no
+  // hash reuse), original = clean cropped base, rendered = what was copied.
+  insertAnnotatedImage(originalPng, renderedPng, annotations) {
+    if (!Array.isArray(annotations) || annotations.length > 2000 || JSON.stringify(annotations).length > 2_000_000) fail('Invalid image edit metadata');
+    const imageFile = this.putPNG(originalPng), renderedFile = this.putPNG(renderedPng);
+    if(this.data.items.length>=20000)fail('Library item limit reached');
+    const now = this.clock();
+    const item = {id: crypto.randomUUID(), kind: 'image', text: '', html: '', url: '', title: '', name: '', pinned: false, folderIds: [], tags: [],
+      imageFile, renderedFile, ocrText: '', annotations: clone(annotations), crop: null, note:'', retainedAt:null, lastCopiedAt:null, createdAt: now, updatedAt: now, trashedAt: null, hiddenFromShelf: false, captureRevision: crypto.randomUUID()};
+    this.data.items = [item, ...this.data.items];
     this.expire(false); this.persist(); return item;
   }
   textIdentity(item) {

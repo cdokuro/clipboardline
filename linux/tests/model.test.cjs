@@ -113,3 +113,28 @@ test('fresh global defaults match Linux non-conflicting shortcuts while old togg
  const restored=new Store(dir);assert.equal(restored.data.settings.shortcuts.toggle,'Control+Alt+Space');assert.equal(restored.data.settings.shortcuts.library,'');assert.equal(restored.data.settings.shortcuts.copyLatest,'');
  restored.modify('setSettings',{patch:{shortcuts:{library:'Control+Alt+L',copyLatest:'Control+Alt+C'}}});assert.equal(new Store(dir).data.settings.shortcuts.library,'Control+Alt+L');restored.modify('setSettings',{patch:{shortcuts:{library:'',copyLatest:''}}});assert.equal(new Store(dir).data.settings.shortcuts.copyLatest,'');assert.throws(()=>restored.modify('setSettings',{patch:{shortcuts:{unknown:'Control+Alt+U'}}}),/Invalid shortcut/);
 }));
+
+test('insertAnnotatedImage never reuses an existing item',()=>fixture(s=>{
+  const plain=s.insert('image',png);const rendered=Buffer.from(png);rendered[rendered.length-1]^=1;
+  const first=s.insertAnnotatedImage(png,rendered,[{type:'rectangle',x:0,y:0,width:1,height:1}]);
+  const second=s.insertAnnotatedImage(png,rendered,[{type:'rectangle',x:0,y:0,width:1,height:1}]);
+  assert.notEqual(first.id,plain.id);assert.notEqual(second.id,first.id);assert.equal(s.data.items.length,3);
+  assert.equal(s.data.items[0].id,second.id);assert.equal(plain.trashedAt,null);
+  const again=s.insert('image',png);assert.equal(again.id,plain.id,'plain captures keep hash reuse and never merge into an annotated document');assert.equal(s.data.items.length,3);
+}));
+test('insertAnnotatedImage keeps annotations and rendered file',()=>fixture((s,_time,dir)=>{
+  const rendered=Buffer.from(png);rendered[rendered.length-1]^=1;const annotations=[{id:1,type:'arrow',x:2,y:3,width:4,height:5,color:'#ff5252'}];
+  const item=s.insertAnnotatedImage(png,rendered,annotations);annotations[0].x=99;
+  assert.equal(item.kind,'image');assert.equal(item.crop,null);assert.deepEqual(item.annotations,[{id:1,type:'arrow',x:2,y:3,width:4,height:5,color:'#ff5252'}]);
+  assert.deepEqual(fs.readFileSync(s.mediaPath(item.id,true)),png);assert.deepEqual(fs.readFileSync(s.mediaPath(item.id)),rendered);
+  assert.ok(item.createdAt>0&&item.captureRevision);
+  const reloaded=new Store(dir).item(item.id);assert.equal(reloaded.renderedFile,item.renderedFile);assert.deepEqual(reloaded.annotations,item.annotations);
+}));
+test('insertAnnotatedImage rejects >2000 annotations',()=>fixture(s=>{
+  const many=Array.from({length:2001},()=>({type:'marker',x:0,y:0}));
+  assert.throws(()=>s.insertAnnotatedImage(png,png,many),/Invalid image edit metadata/);
+  assert.throws(()=>s.insertAnnotatedImage(png,png,[{type:'text',text:'x'.repeat(2_000_001)}]),/Invalid image edit metadata/);
+  assert.throws(()=>s.insertAnnotatedImage(png,png,'nope'),/Invalid image edit metadata/);
+  assert.throws(()=>s.insertAnnotatedImage(png,Buffer.from('bad'),[]),/Invalid PNG/);
+  assert.equal(s.data.items.length,0);
+}));
