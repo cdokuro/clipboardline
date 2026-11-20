@@ -534,7 +534,7 @@ function captureWorkspace(){
  const crop=captureCrop(session);
  const sizeText=crop?`${Math.round(crop.width)} × ${Math.round(crop.height)} px`:`${t('Full screen')} · ${session.width} × ${session.height} px`;
  const tools=[['crop','crop','Select area'],['select','select','Select annotation'],['pen','edit','Pen'],['marker','marker','Marker'],['rectangle','rectangle','Rectangle'],['ellipse','ellipse','Ellipse'],['arrow','arrow','Arrow'],['line','line','Line'],['text','text','Text annotation'],['number','number','Number stamp'],['blur','blur','Blur'],['pixelate','pixelate','Pixelate']].map(([tool,symbol,label])=>iconButton('capture-tool',symbol,label,`data-tool="${tool}" aria-pressed="${session.tool===tool}"`)).join('');
- return `<main class="content capture-workspace" id="capture-workspace" aria-label="${attr(t('Screenshot'))}"><div class="capture-hint-pill"><span class="capture-hint-text">${esc(t('Drag across any area to capture · Enter saves · Esc cancels'))}</span><span class="capture-size-badge" id="capture-size-badge">${esc(sizeText)}</span></div><div class="capture-stage" id="capture-stage"><div class="capture-document" id="capture-document" style="transform:translate(${session.pan.x}px,${session.pan.y}px) scale(${session.zoom||1})"><canvas id="capture-canvas" width="${session.width}" height="${session.height}" tabindex="0" aria-label="${attr(t('Screenshot'))}"></canvas></div></div><div class="capture-toolbar" id="capture-toolbar" role="toolbar" aria-label="${attr(t('Screenshot'))}">${tools}<span class="divider"></span>${markupStyleControls(session,name=>CAPTURE_CONTROL_IDS[name])}<span class="divider"></span>${iconButton('capture-zoom-out','zoomOut','Zoom out')}<button data-action="capture-zoom-reset" class="quiet zoom-badge" id="capture-zoom-badge" title="${attr(t('Reset zoom'))}">${Math.round((session.zoom||1)*100)}%</button>${iconButton('capture-zoom-in','zoomIn','Zoom in')}<span class="divider"></span><button data-action="capture-fullscreen" class="quiet" title="${attr(t('Full screen'))}">${icon('expand')}<span>${esc(t('Full screen'))}</span></button>${iconButton('capture-undo','undo','Undo',session.doc.history.length?'':'disabled')}${iconButton('capture-redo','redo','Redo',session.doc.redo.length?'':'disabled')}<span class="divider"></span><button data-action="cancel-capture" class="danger">${icon('close')}<span>${esc(t('Cancel'))}</span><kbd>Esc</kbd></button><button data-action="commit-capture" class="primary" ${session.busy?'disabled':''}>${icon('check')}<span>${esc(t('Save to line'))}</span><kbd>Enter</kbd></button></div></main>`;
+ return `<main class="content capture-workspace" id="capture-workspace" aria-label="${attr(t('Screenshot'))}"><div class="capture-hint-pill"><span class="capture-hint-text">${esc(t('Drag across any area to capture · Enter saves · Esc cancels'))}</span><span class="capture-size-badge" id="capture-size-badge">${esc(sizeText)}</span></div><div class="capture-stage" id="capture-stage"><div class="capture-document" id="capture-document" style="transform:translate(${session.pan.x}px,${session.pan.y}px) scale(${session.zoom||1})"><canvas id="capture-canvas" width="${session.width}" height="${session.height}" tabindex="0" aria-label="${attr(t('Screenshot'))}"></canvas></div></div><div class="capture-toolbar" id="capture-toolbar" role="toolbar" aria-label="${attr(t('Screenshot'))}">${tools}<span class="divider"></span>${markupStyleControls(session,name=>CAPTURE_CONTROL_IDS[name])}<span class="divider"></span>${iconButton('capture-zoom-out','zoomOut','Zoom out')}<button data-action="capture-zoom-reset" class="quiet zoom-badge" id="capture-zoom-badge" title="${attr(t('Reset zoom'))}">${Math.round((session.zoom||1)*100)}%</button>${iconButton('capture-zoom-in','zoomIn','Zoom in')}<span class="divider"></span><button data-action="capture-fullscreen" class="quiet" title="${attr(t('Full screen'))}">${icon('expand')}<span>${esc(t('Full screen'))}</span></button>${iconButton('capture-undo','undo','Undo',session.doc.history.length?'':'disabled')}${iconButton('capture-redo','redo','Redo',session.doc.redo.length?'':'disabled')}<span class="divider"></span><button data-action="capture-output" data-output="save" class="quiet" ${session.busy?'disabled':''}><span>${esc(t('Save'))}</span><kbd>Ctrl+S</kbd></button><button data-action="capture-output" data-output="saveAs" class="quiet" ${session.busy?'disabled':''}><span>${esc(t('Save As…'))}</span></button><button data-action="capture-output-menu" class="quiet" aria-haspopup="menu" ${session.busy?'disabled':''}><span>${esc(t('Export'))}</span><kbd>Ctrl+E</kbd></button><span class="divider"></span><button data-action="cancel-capture" class="danger">${icon('close')}<span>${esc(t('Cancel'))}</span><kbd>Esc</kbd></button><button data-action="commit-capture" class="primary" ${session.busy?'disabled':''}>${icon('check')}<span>${esc(t('Save to line'))}</span><kbd>Enter</kbd></button></div></main>`;
 }
 function drawCaptureCanvas(){
  const session=ui.captureSession,canvas=document.getElementById('capture-canvas');
@@ -624,31 +624,61 @@ function captureDoubleClickCommits(session,event){
 function stepCaptureHistory(redo=false){const session=ui.captureSession;if(session)session.keyNudge=false;if(session&&(redo?annotationEngine.redo:annotationEngine.undo)(session.doc))render();}
 // Same shift as a select-tool move: x/y and every pen/marker point.
 function offsetCaptureAnnotations(annotations,dx,dy){return annotations.map(value=>{const a=JSON.parse(JSON.stringify(value));if(Number.isFinite(a.x))a.x-=dx;if(Number.isFinite(a.y))a.y-=dy;if(Array.isArray(a.points))a.points=a.points.map(p=>({x:p.x-dx,y:p.y-dy}));return a;});}
+function capturePayload(session){
+ let dataUrl=session.dataUrl,extra={};
+ const width=session.base?.naturalWidth||session.width,height=session.base?.naturalHeight||session.height;
+ const crop=captureCrop(session),annotations=session.doc.annotations;
+ if(session.base?.complete&&session.base.naturalWidth&&(crop||annotations.length)){
+  const full=document.createElement('canvas');full.width=width;full.height=height;
+  const c=full.getContext('2d');c.drawImage(session.base,0,0,width,height);
+  annotationEngine.drawAnnotations(c,annotations,{base:session.base,clip:captureClip(session,width,height)});
+  const rx=crop?Math.max(0,Math.round(crop.x)):0,ry=crop?Math.max(0,Math.round(crop.y)):0;
+  const rw=crop?Math.max(1,Math.min(width-rx,Math.round(crop.width))):width,rh=crop?Math.max(1,Math.min(height-ry,Math.round(crop.height))):height;
+  const region=source=>{if(!crop)return source;const out=document.createElement('canvas');out.width=rw;out.height=rh;out.getContext('2d').drawImage(source,rx,ry,rw,rh,0,0,rw,rh);return out;};
+  dataUrl=region(full).toDataURL('image/png');
+  // Editable document: the clean (cropped) base plus annotations in its coordinates. Only the
+  // rect goes along; main cuts the original from its own screenshot after clipboard + hide (Q2).
+  if(annotations.length)extra={originalRect:{x:rx,y:ry,width:rw,height:rh},annotations:offsetCaptureAnnotations(annotations,rx,ry)};
+ }
+ return{dataUrl,...extra};
+}
 async function commitCaptureSession(){
  const session=ui.captureSession;if(!session||session.busy)return;
  session.busy=true;
  try{
-  let dataUrl=session.dataUrl,extra={};
-  const width=session.base?.naturalWidth||session.width,height=session.base?.naturalHeight||session.height;
-  const crop=captureCrop(session),annotations=session.doc.annotations;
-  if(session.base?.complete&&session.base.naturalWidth&&(crop||annotations.length)){
-   const full=document.createElement('canvas');full.width=width;full.height=height;
-   const c=full.getContext('2d');c.drawImage(session.base,0,0,width,height);
-   annotationEngine.drawAnnotations(c,annotations,{base:session.base,clip:captureClip(session,width,height)});
-   const rx=crop?Math.max(0,Math.round(crop.x)):0,ry=crop?Math.max(0,Math.round(crop.y)):0;
-   const rw=crop?Math.max(1,Math.min(width-rx,Math.round(crop.width))):width,rh=crop?Math.max(1,Math.min(height-ry,Math.round(crop.height))):height;
-   const region=source=>{if(!crop)return source;const out=document.createElement('canvas');out.width=rw;out.height=rh;out.getContext('2d').drawImage(source,rx,ry,rw,rh,0,0,rw,rh);return out;};
-   dataUrl=region(full).toDataURL('image/png');
-   // Editable document: the clean (cropped) base plus annotations in its coordinates. Only the
-   // rect goes along; main cuts the original from its own screenshot after clipboard + hide (Q2).
-   if(annotations.length)extra={originalRect:{x:rx,y:ry,width:rw,height:rh},annotations:offsetCaptureAnnotations(annotations,rx,ry)};
-  }
+  const payload=capturePayload(session);
   ui.captureSession=null;
-  await command('commitCapture',{dataUrl,...extra});
+  await command('commitCapture',payload);
  }catch(error){
   if(ui.captureSession===session)session.busy=false;
   toast(error?.message||'Screenshot could not be saved.');
  }
+}
+// Save/Export from the overlay: commit the capture as a Library item without the clipboard write,
+// then run the shared output action on that item. The overlay closes like after Enter.
+async function captureOutput(action,options={}){
+ const session=ui.captureSession;if(!session||session.busy)return false;
+ session.busy=true;
+ let reply;
+ try{
+  const payload=capturePayload(session);
+  ui.captureSession=null;
+  reply=await command('commitCapture',{...payload,copy:false});
+ }catch(error){
+  if(ui.captureSession===session)session.busy=false;
+  toast(error?.message||'Screenshot could not be saved.');
+  return false;
+ }
+ const id=reply?.result?.id;
+ if(!id){if(ui.captureSession===null&&ui.view==='capture')ui.captureSession=session;session.busy=false;render();return false;}
+ // The reply is a full state packet; make sure the new item is known before runOutput looks it up.
+ if(!item(id)&&reply.items)applyState(reply);
+ return runOutput(action,id,options);
+}
+function captureOutputMenu(){
+ const session=ui.captureSession;if(!session||session.busy)return;
+ const box=document.querySelector?.('[data-action="capture-output-menu"]')?.getBoundingClientRect?.();
+ void openOutputMenu(null,{x:box?box.left:Math.max(8,(window.innerWidth||600)/2-110),y:box?Math.max(8,box.top-380):80,run:(action,_id,options)=>captureOutput(action,options)});
 }
 async function cancelCaptureSession(){
  ui.captureSession=null;
@@ -1183,6 +1213,12 @@ document.addEventListener('keydown',async event=>{
   if(event.key==='Enter'&&!event.altKey&&!event.shiftKey){event.preventDefault();await commitCaptureSession();return;}
   // Ctrl+C = Enter (kaydet, panoya kopyala, kapat); metin notu yazarken normal kopyalama kalsın
   if(ctrl&&!event.altKey&&!event.shiftKey&&event.key.toLowerCase()==='c'&&!isEditor(event.target)){event.preventDefault();await commitCaptureSession();return;}
+  if(ctrl&&!event.altKey&&!isEditor(event.target)){
+   const outputKey=event.key.toLowerCase(),shifted=event.shiftKey;
+   const outputAction=outputKey==='s'?(shifted?'saveAs':'save'):outputKey==='c'&&shifted?'copyLocation':outputKey==='p'&&!shifted?'print':null;
+   if(outputAction){event.preventDefault();await captureOutput(outputAction);return;}
+   if(outputKey==='e'&&!shifted){event.preventDefault();captureOutputMenu();return;}
+  }
   if(ctrl&&event.key.toLowerCase()==='z'){event.preventDefault();stepCaptureHistory(event.shiftKey);return;}
   if(ctrl&&!event.shiftKey&&event.key.toLowerCase()==='y'){event.preventDefault();stepCaptureHistory(true);return;}
   if(ctrl&&['=','+'].includes(event.key)){event.preventDefault();setCaptureZoom((ui.captureSession?.zoom||1)*1.25);return;}
@@ -1319,6 +1355,8 @@ async function clickAction(target){const action=target.dataset.action;
  if(action==='capture-undo'){stepCaptureHistory();return;}
  if(action==='capture-redo'){stepCaptureHistory(true);return;}
  if(action==='commit-capture'){await commitCaptureSession();return;}
+ if(action==='capture-output'){await captureOutput(target.dataset.output);return;}
+ if(action==='capture-output-menu'){captureOutputMenu();return;}
  if(action==='cancel-capture'){await cancelCaptureSession();return;}
  await perform(action);
 }

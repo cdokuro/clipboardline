@@ -46,9 +46,10 @@ function fixture({deferInitialState=false,initialVisible=true,queuedAnimationFra
   if(action==='trashUndoably'){trashRemoved=selected.filter(item=>!item.trashedAt).map(clone);trashResult={ids:trashRemoved.map(item=>item.id)};selected.forEach(item=>{item.trashedAt=Date.now();item.hiddenFromShelf=true;});state.canUndoTrash=trashRemoved.length>0;}
   if(action==='undoTrash'){trashResult={ids:trashRemoved.map(item=>item.id)};for(const before of trashRemoved)Object.assign(state.items.find(item=>item.id===before.id),before);trashRemoved=[];state.canUndoTrash=false;}
   if(action==='copy'&&!payload.keepOpen||action==='paste'||action==='hide')state.windowVisible=false;
+  let captured;if(action==='commitCapture'&&outputConfig.captureId){captured={id:outputConfig.captureId};state.items.unshift(base(captured.id,'image',2000,{name:'Captured',mediaUrl:'appmedia://media/'+captured.id,originalMediaUrl:'appmedia://media/'+captured.id+'/original'}));state.view='shelves';state.windowVisible=false;}
   if(action==='show'){state.view='shelves';state.windowVisible=true;state.viewEvent={serial:String(commands.length)};}
   if(action==='library'||action==='settings'){state.view=action;state.windowVisible=true;}
-  const output=clone(state);if(trashResult)output.result=trashResult;if(action==='outputInfo')output.result=clone(outputConfig.info);if(action==='outputPlan')output.result=clone(outputConfig.plan);if(action==='outputWrite')output.result=clone(outputConfig.write);if(action==='outputRun')output.result=outputConfig.runResults.length?outputConfig.runResults.shift():{};if(cleanupError)output.result={error:cleanupError};
+  const output=clone(state);if(trashResult)output.result=trashResult;if(captured)output.result=captured;if(action==='outputInfo')output.result=clone(outputConfig.info);if(action==='outputPlan')output.result=clone(outputConfig.plan);if(action==='outputWrite')output.result=clone(outputConfig.write);if(action==='outputRun')output.result=outputConfig.runResults.length?outputConfig.runResults.shift():{};if(cleanupError)output.result={error:cleanupError};
   if(action==='saveImage'&&deferredImageBroadcast){const pending=deferredImageBroadcast;deferredImageBroadcast=null;pendingImageBroadcast=output;if(pending.surface)subscriber?.({surfaceOnly:true,windowVisible:true});}
   else subscriber?.(output);
   if(delayedReply?.action===action){const pending=delayedReply;delayedReply=null;await pending.promise;}
@@ -1103,4 +1104,61 @@ test('Keyboard shortcut settings list the output actions and Turkish error strin
  f.api.emit({view:'settings'});await f.ready();await f.click('settings-tab',{tab:'shortcuts'});
  for(const label of ['Görseli dosyaya kaydet','Görseli farklı kaydet…','Dışa aktarma menüsü'])assert.ok(f.main.includes(label),label);
  const source=fs.readFileSync(path.join(__dirname,'../renderer.js'),'utf8');assert.ok(source.includes('"Özgün görsel açılamadı."')&&source.includes('"İşlem tamamlanamadı."'));
+});
+
+// ---- Capture overlay output actions
+const CAPTURED='00000000-0000-4000-8000-0000000000c1';
+async function outputCaptureFixture(language){const f=captureFixture();f.outputConfig.captureId=CAPTURED;if(language)f.api.emit({settings:{...f.state.settings,language}});await f.ready();return f;}
+const captureCommit=f=>f.commands.filter(value=>value.action==='commitCapture');
+test('capture Ctrl+S commits without copying then saves',async()=>{
+ const f=await outputCaptureFixture();await crop0(f);await f.key('KeyR');await captureDrag(f,[120,60],[180,100]);
+ const event=await f.key('KeyS',{ctrl:true});assert.ok(event.prevented);
+ const [commit]=captureCommit(f);assert.equal(captureCommit(f).length,1);assert.equal(commit.payload.copy,false);assert.match(commit.payload.dataUrl,/^data:image\/png;base64,/);assert.ok(commit.payload.originalRect&&commit.payload.annotations.length===1);
+ const {copy,...rest}=commit.payload;assert.deepEqual(Object.keys(rest).sort(),['annotations','dataUrl','originalRect']);
+ assert.deepEqual(outputCommands(f).map(value=>[value.action,value.payload]),[['outputPlan',{id:CAPTURED,mode:'save'}],['outputWrite',{token:'tok-1'}]]);
+});
+test('capture Ctrl+Shift+S plans Save As for the committed item',async()=>{
+ const f=await outputCaptureFixture();await f.key('KeyS',{ctrl:true,shift:true});assert.equal(captureCommit(f)[0].payload.copy,false);assert.deepEqual(outputCommands(f)[0].payload,{id:CAPTURED,mode:'saveAs'});
+});
+test('capture Enter and Ctrl+C payloads are unchanged',async()=>{
+ for(const press of [()=>['Enter'],()=>['KeyC',{ctrl:true}]]){
+  const f=await outputCaptureFixture();await crop0(f);await f.key(...press());
+  const [commit]=captureCommit(f);assert.equal(Object.hasOwn(commit.payload,'copy'),false);assert.deepEqual(Object.keys(commit.payload),['dataUrl']);assert.equal(outputCommands(f).length,0);
+ }
+});
+test('capture Ctrl+Shift+C copies the location',async()=>{
+ const f=await outputCaptureFixture();await f.key('KeyC',{ctrl:true,shift:true});
+ assert.equal(captureCommit(f)[0].payload.copy,false);assert.deepEqual(outputCommands(f).map(value=>[value.action,value.payload]),[['outputRun',{id:CAPTURED,action:'copyLocation'}]]);
+});
+test('capture output keys are ignored in a text field',async()=>{
+ const f=await outputCaptureFixture();
+ for(const [code,mods]of [['KeyS',{ctrl:true}],['KeyS',{ctrl:true,shift:true}],['KeyC',{ctrl:true,shift:true}],['KeyP',{ctrl:true}],['KeyE',{ctrl:true}]])await f.key(code,{...mods,target:f.editor('capture-text')});
+ assert.equal(captureCommit(f).length,0);assert.equal(outputCommands(f).length,0);assert.equal(f.menu,'');
+});
+test('capture Ctrl+P prints the committed item',async()=>{
+ const f=await outputCaptureFixture();await f.key('KeyP',{ctrl:true});assert.equal(captureCommit(f)[0].payload.copy,false);assert.deepEqual(outputCommands(f)[0].payload,{id:CAPTURED,action:'print'});
+});
+test('capture toolbar shows Save, Save As and Export',async()=>{
+ const f=await outputCaptureFixture('tr');
+ for(const [needle,label]of [['data-action="capture-output" data-output="save"','Kaydet'],['data-action="capture-output" data-output="saveAs"','Farklı kaydet…'],['data-action="capture-output-menu"','Dışa aktar']]){const at=f.main.indexOf(needle);assert.ok(at>0,needle);assert.ok(f.main.slice(at,at+400).includes(label),label);}
+ assert.ok(f.main.indexOf('data-action="capture-output-menu"')<f.main.indexOf('data-action="cancel-capture"'));assert.match(f.main,/<kbd>Ctrl\+S<\/kbd>/);assert.match(f.main,/<kbd>Ctrl\+E<\/kbd>/);
+ await f.click('capture-output',{output:'saveAs'});assert.equal(captureCommit(f)[0].payload.copy,false);assert.equal(outputCommands(f)[0].payload.mode,'saveAs');
+});
+test('Escape closes the output menu before cancelling the capture',async()=>{
+ const f=await outputCaptureFixture();await f.key('KeyE',{ctrl:true});assert.match(f.menu,/role="menu"/);
+ await f.key('Escape');assert.equal(f.menu,'');assert.equal(f.commands.filter(value=>value.action==='cancelCapture').length,0);assert.match(f.main,/id="capture-canvas"/);
+ await f.key('Escape');assert.equal(f.commands.filter(value=>value.action==='cancelCapture').length,1);
+});
+test('capture menu Print runs on the committed item',async()=>{
+ const f=await outputCaptureFixture();await f.click('capture-output-menu');assert.match(f.menu,/role="menu"/);await f.click('output-run',{output:'print'});
+ assert.equal(captureCommit(f)[0].payload.copy,false);assert.deepEqual(outputCommands(f).map(value=>[value.action,value.payload]),[['outputRun',{id:CAPTURED,action:'print'}]]);assert.equal(f.menu,'');
+});
+test('capture menu keyboard run passes app and language through captureOutput',async()=>{
+ const f=await outputCaptureFixture();await f.click('capture-output-menu');await f.click('output-run',{output:'openWith',app:'org.kde.gwenview'});
+ assert.deepEqual(outputCommands(f)[0].payload,{id:CAPTURED,action:'openWith',app:'org.kde.gwenview'});
+});
+test('a failed capture commit restores the session and does not run the output',async()=>{
+ const f=await outputCaptureFixture();f.api.command=(orig=>async(action,payload)=>{if(action==='commitCapture')throw new Error('disk full');return orig(action,payload);})(f.api.command);
+ await f.key('KeyS',{ctrl:true});assert.equal(outputCommands(f).length,0);assert.match(f.main,/id="capture-canvas"/);
+ await f.key('KeyS',{ctrl:true});assert.equal(outputCommands(f).length,0,'busy was reset and the retry also fails cleanly');
 });
