@@ -143,3 +143,25 @@ test('insertAnnotatedImage items have exactly the keys of insert image items',()
   const annotated=s.insertAnnotatedImage(png,rendered,[{type:'marker',x:0,y:0}]);
   assert.deepEqual(Object.keys(annotated).sort(),Object.keys(plain).sort());
 }));
+test('output settings default and validate',()=>fixture((s,_t,dir)=>{
+  const defaults={saveFolder:'',filenameTemplate:'Screenshot_<yyyy><MM><dd>_<hh><mm><ss>',format:'png',quality:90,ocrLanguages:['eng','tur']};
+  assert.deepEqual(s.data.settings.output,defaults);
+  s.modify('setSettings',{patch:{output:{format:'webp',quality:75}}});
+  assert.deepEqual(s.data.settings.output,{...defaults,format:'webp',quality:75});
+  s.modify('setSettings',{patch:{output:{ocrLanguages:['eng','eng','chi_sim']}}});assert.deepEqual(s.data.settings.output.ocrLanguages,['eng','chi_sim']);
+  s.modify('setSettings',{patch:{output:{saveFolder:'/tmp/shots',filenameTemplate:'x<#>'}}});assert.equal(s.data.settings.output.saveFolder,'/tmp/shots');
+  const before=structuredClone(s.data.settings);
+  for(const output of [{format:'gif'},{quality:0},{quality:101},{quality:1.5},{saveFolder:'relative'},{saveFolder:'/'+'a'.repeat(4096)},{ocrLanguages:[]},{ocrLanguages:Array.from({length:17},(_,i)=>'a'+String.fromCharCode(97+i)+'b')},{ocrLanguages:['EN']},{ocrLanguages:[1]},{filenameTemplate:''},{filenameTemplate:'a'.repeat(301)},{filenameTemplate:'a\nb'},{filenameTemplate:'a\0b'},{bogus:1}])assert.throws(()=>s.modify('setSettings',{patch:{output}}),/Invalid output preference/,JSON.stringify(output).slice(0,60));
+  assert.throws(()=>s.modify('setSettings',{patch:{output:null}}),/Invalid output preference/);
+  assert.deepEqual(s.data.settings,before);
+  const raw=JSON.parse(fs.readFileSync(s.file,'utf8'));delete raw.settings.output;fs.writeFileSync(s.file,JSON.stringify(raw));
+  assert.deepEqual(new Store(dir).data.settings.output,defaults);
+}));
+test('setSavedPath persists and is public',()=>fixture((s,time,dir)=>{
+  const item=s.insert('image',png);assert.equal(item.savedPath,'');const updated=item.updatedAt;time(5000);
+  s.setSavedPath(item.id,'/tmp/x.png');assert.equal(item.updatedAt,updated);
+  assert.equal(new Store(dir).item(item.id).savedPath,'/tmp/x.png');assert.equal(s.publicState().items[0].savedPath,'/tmp/x.png');
+  for(const bad of ['rel.png','','/a\0b','/'+'a'.repeat(4096),null,5])assert.throws(()=>s.setSavedPath(item.id,bad));
+  assert.throws(()=>s.setSavedPath('00000000-0000-4000-8000-000000000099','/tmp/y.png'));
+  assert.equal(item.savedPath,'/tmp/x.png');
+}));

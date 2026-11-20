@@ -17,13 +17,14 @@ const DEFAULTS = Object.freeze({
   autoCheckUpdates: true, watchFolders: [], openAfterScreenshot: true,
   theme:'soft', cardSize:'medium', sounds:false, launchAtLogin:false, language:'system',indexImages:true,
   libraryListMode:false,libraryInspectorVisible:true,librarySidebarVisible:true,librarySidebarWidth:220,libraryInspectorWidth:300,
-  libraryListColumns:{title:300,kind:80,tags:150,created:130},recentPinFolderIds:[]
+  libraryListColumns:{title:300,kind:80,tags:150,created:130},recentPinFolderIds:[],
+  output:{saveFolder:'',filenameTemplate:'Screenshot_<yyyy><MM><dd>_<hh><mm><ss>',format:'png',quality:90,ocrLanguages:['eng','tur']}
 });
 const clone = value => structuredClone(value);
 // One item schema for every insert path, so new fields cannot go missing from one of them.
 function newItem(kind, now, fields = {}) {
   return {id: crypto.randomUUID(), kind, text: '', html: '', url: '', title: '', name: '', pinned: false, folderIds: [], tags: [],
-    imageFile: '', renderedFile: '', ocrText: '', annotations: [], crop: null, note:'', retainedAt:null, lastCopiedAt:null, createdAt: now, updatedAt: now, trashedAt: null, hiddenFromShelf: false, ...fields};
+    imageFile: '', renderedFile: '', ocrText: '', annotations: [], crop: null, note:'', savedPath:'', retainedAt:null, lastCopiedAt:null, createdAt: now, updatedAt: now, trashedAt: null, hiddenFromShelf: false, ...fields};
 }
 // Annotation limits shared by saveImage and insertAnnotatedImage.
 const validEditAnnotations = annotations => Array.isArray(annotations) && annotations.length <= 2000 && JSON.stringify(annotations).length <= 2_000_000;
@@ -78,6 +79,17 @@ function settings(patch, previous = DEFAULTS) {
     } else if (['theme','cardSize','language'].includes(key)) {
       const values={theme:['soft','neutral','catppuccin','rosepine'],cardSize:['small','medium','large'],language:['system','en','tr','es','fr','pt-BR','az','zh-Hans','ja','ko']};
       if(!values[key].includes(value))fail('Invalid appearance preference');out[key]=value;
+    } else if(key==='output') {
+      const bad=()=>fail('Invalid output preference');if(!value||typeof value!=='object'||Array.isArray(value))bad();
+      for(const [name,entry] of Object.entries(value)){
+        if(name==='saveFolder'){if(typeof entry!=='string'||entry.length>4096||entry.includes('\0')||(entry!==''&&!path.isAbsolute(entry)))bad();}
+        else if(name==='filenameTemplate'){if(typeof entry!=='string'||!entry.length||entry.length>300||/[\0\r\n]/.test(entry))bad();}
+        else if(name==='format'){if(!['png','jpg','webp'].includes(entry))bad();}
+        else if(name==='quality'){if(!Number.isInteger(entry)||entry<1||entry>100)bad();}
+        else if(name==='ocrLanguages'){if(!Array.isArray(entry)||entry.length<1||entry.length>16||entry.some(code=>typeof code!=='string'||!/^[a-z]{3}(_[a-z]+)?$/.test(code)))bad();out.output.ocrLanguages=[...new Set(entry)];continue;}
+        else bad();
+        out.output[name]=entry;
+      }
     } else if (key === 'watchFolders') {
       if (!Array.isArray(value) || value.length > 20 || value.some(v => typeof v !== 'string' || !path.isAbsolute(v) || v.length > 4096)) fail('Invalid watched folder');
       out.watchFolders = [...new Set(value)];
@@ -183,6 +195,12 @@ class Store {
   }
   selected(value) { const selected = ids(value); const result = selected.map(id => this.data.items.find(i => i.id === id)); if (result.some(i => !i)) fail('An item no longer exists'); return result; }
   item(id) { return this.selected([id])[0]; }
+  // Records where the user's file copy lives; deliberately not an edit, so updatedAt stays.
+  setSavedPath(id, file) {
+    if (typeof file !== 'string' || !path.isAbsolute(file) || file.length > 4096 || file.includes('\0')) fail('Invalid saved path');
+    const item = this.item(id), before = item.savedPath;item.savedPath = file;
+    try { this.persist(); } catch (error) { item.savedPath = before; throw error; }
+  }
   unsavedHistorySnapshot(kind='all') {
     if(kind!=='all'&&!KINDS.includes(kind))fail('Invalid history type');
     const items=this.data.items.filter(item=>!item.trashedAt&&!saved(item)&&(kind==='all'||item.kind===kind));
