@@ -119,6 +119,16 @@ test('blur/pixelate renders are cached per base, rect, clip and strength',()=>{
   run(ann);assert.ok(f.made.length<=5+60+1,type+' bounded');
  }
 });
+test('blur/pixelate cache stays within its pixel budget per base',()=>{
+ for(const type of['blur','pixelate']){
+  const f=scratchFactory(),base={},clip={x:0,y:0,width:2560,height:1440};
+  const run=a=>A.drawAnnotations(recorder().ctx,[a],{base,clip,createCanvas:f.create});
+  // A box dragged out frame by frame: a new size every frame.
+  for(let i=1;i<=120;i++){run({type,x:0,y:0,width:20*i,height:11*i,strength:type==='blur'?50:4});const stats=A.renderCacheStats(base);assert.ok(stats.pixels<=stats.budget,type+' frame '+i+': '+stats.pixels+' > '+stats.budget);}
+  const settled={type,x:100,y:100,width:400,height:300,strength:50},made=f.made.length;
+  run(settled);run(settled);run(settled);assert.equal(f.made.length,made+1,type+' settled rect reused');
+ }
+});
 test('blur handles negative size and draws nothing outside clip or without base',()=>{
  const r=recorder();
  A.drawAnnotations(r.ctx,[{type:'blur',x:60,y:40,width:-40,height:-30,strength:50}],{base:BASE,createCanvas:scratchFactory().create});

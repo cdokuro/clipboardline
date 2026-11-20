@@ -93,16 +93,24 @@
  }
  // Render cache: base identity -> bounded Map(key -> offscreen canvas). Engine-internal,
  // so annotations stay plain JSON. Key = effect + clamped region + radius/cell; a different
- // rect, clip (changes the region), strength or base misses. Each base keeps at most 32 entries.
- const renderCache=new WeakMap(),CACHE_LIMIT=32;
+ // rect, clip (changes the region), strength or base misses. Each base keeps at most 32 entries
+ // and CACHE_PIXEL_BUDGET canvas pixels (LRU eviction), so a box dragged out frame by frame
+ // cannot pile up a canvas per frame; a render larger than the budget is not kept.
+ // 16M px (~64 MB RGBA) still keeps one full-screen 4K blur.
+ const renderCache=new WeakMap(),CACHE_LIMIT=32,CACHE_PIXEL_BUDGET=16*1024*1024;
+ const pixelsOf=canvas=>(canvas.width||0)*(canvas.height||0);
  function cachedRender(base,key,make){
   if(!base||(typeof base!=='object'&&typeof base!=='function'))return make();
   let entries=renderCache.get(base);if(!entries){entries=new Map();renderCache.set(base,entries);}
   if(entries.has(key)){const hit=entries.get(key);entries.delete(key);entries.set(key,hit);return hit;}
   const made=make();if(!made)return made;
-  entries.set(key,made);if(entries.size>CACHE_LIMIT)entries.delete(entries.keys().next().value);
+  const size=pixelsOf(made);if(size>CACHE_PIXEL_BUDGET)return made;
+  let total=size;for(const canvas of entries.values())total+=pixelsOf(canvas);
+  entries.set(key,made);
+  while(entries.size>CACHE_LIMIT||total>CACHE_PIXEL_BUDGET){const oldest=entries.keys().next().value;total-=pixelsOf(entries.get(oldest));entries.delete(oldest);}
   return made;
  }
+ function renderCacheStats(base){const entries=renderCache.get(base);let pixels=0;for(const canvas of entries?.values()||[])pixels+=pixelsOf(canvas);return{entries:entries?.size||0,pixels,budget:CACHE_PIXEL_BUDGET};}
  const defaultCanvas=()=>typeof document==='object'?document.createElement('canvas'):null;
  // Blur samples the rect padded by 2x radius (inside clip and the image) so the box edge mixes
  // real neighbours, not transparency; the scratch gets an opaque underlay (a 1px sample of the
@@ -167,6 +175,6 @@
    context.restore();
   }
  }
- const exports={TOOLS,drawAnnotations,DEFAULT_STYLE,createDocument,checkpoint,undo,redo,annotationBounds,hitTest,beginTool,updateTool,endTool,addText,deleteSelected,applyStyle,setNextNumber};
+ const exports={TOOLS,drawAnnotations,DEFAULT_STYLE,createDocument,checkpoint,undo,redo,annotationBounds,hitTest,beginTool,updateTool,endTool,addText,deleteSelected,applyStyle,setNextNumber,renderCacheStats};
  if(typeof module==='object'&&module.exports)module.exports=exports;else scope.clipboardLineAnnotations=exports;
 })(typeof window==='object'?window:globalThis);
