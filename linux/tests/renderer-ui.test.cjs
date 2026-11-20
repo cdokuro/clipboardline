@@ -1087,3 +1087,20 @@ test('Turkish UI shows Turkish output labels',async()=>{
  for(const label of ['Farklı kaydet…','Konumu kopyala','QR kodu tara','İçeren klasörü aç','Birlikte aç','Yazdır','Metni çıkar · Turkish'])assert.ok(f.menu.includes(label),label);
  assert.match(f.overlay,/Dışa aktar/);
 });
+
+test('the output menu closes on view change, window hide and when its item is gone',async()=>{
+ const open=async()=>{const f=fixture();await f.ready();await f.key('KeyE',{ctrl:true});assert.match(f.menu,/role="menu"/);return f;};
+ let f=await open();f.api.emit({view:'capture'});await f.ready();assert.equal(f.menu,'');
+ f=await open();f.api.surface({windowVisible:false});await f.ready();assert.equal(f.menu,'');
+ f=await open();f.api.emit({items:f.state.items.map(value=>value.id===f.image?{...value,trashedAt:5}:value)});await f.ready();assert.equal(f.menu,'');
+ f=await open();f.api.emit({items:f.state.items.filter(value=>value.id!==f.image)});await f.ready();assert.equal(f.menu,'');
+ f=await open();f.api.emit({libraryRevision:3});await f.ready();assert.match(f.menu,/role="menu"/,'unrelated packets keep the menu');
+ f.api.emit({view:'capture'});await f.ready();await f.key('ArrowDown');assert.equal(outputCommands(f).length,0,'stale menu no longer swallows keys');
+});
+
+test('Keyboard shortcut settings list the output actions and Turkish error strings exist',async()=>{
+ const f=fixture();await f.ready();await f.api.command('settings');await f.api.emit({settings:{...f.state.settings,language:'tr'}});await f.ready();
+ f.api.emit({view:'settings'});await f.ready();await f.click('settings-tab',{tab:'shortcuts'});
+ for(const label of ['Görseli dosyaya kaydet','Görseli farklı kaydet…','Dışa aktarma menüsü'])assert.ok(f.main.includes(label),label);
+ const source=fs.readFileSync(path.join(__dirname,'../renderer.js'),'utf8');assert.ok(source.includes('"Özgün görsel açılamadı."')&&source.includes('"İşlem tamamlanamadı."'));
+});
