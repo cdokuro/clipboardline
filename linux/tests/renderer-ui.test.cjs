@@ -9,12 +9,15 @@ const vm=require('node:vm');
 const golden=require('./fixtures/annotations-golden.json');
 const crypto=require('node:crypto');
 const {execFileSync}=require('node:child_process');
+const os=require('node:os');
+const {exportCopies}=require('../lib/export-copies.cjs');
 
-function fixture({deferInitialState=false,initialVisible=true,queuedAnimationFrames=false,imageRaster={width:900,height:220},imageDocument=false}={}){
- const listeners=new Map(),nodes=new Map(),commands=[],imageLoads=[],animationFrames=[],paintCalls=[],markupCalls=[];let exportFailures=0;
+function fixture({deferInitialState=false,initialVisible=true,queuedAnimationFrames=false,imageRaster={width:900,height:220},imageDocument=false,exporter=null,trackFocus=false}={}){
+ const listeners=new Map(),nodes=new Map(),commands=[],imageLoads=[],animationFrames=[],paintCalls=[],markupCalls=[];let exportFailures=0,lastClick=null,testDocument;
  class Element{
-  constructor(id=''){this.id=id;this.innerHTML='';this.textContent='';this.dataset={};this.style={};this.className='';this.value='';this.selectionStart=0;this.selectionEnd=0;this.classList={add(){},remove(){},contains(){return false;}};}
-  setAttribute(){}querySelector(){return null;}querySelectorAll(){return [];}focus(){}blur(){}select(){}setSelectionRange(){}scrollIntoView(){}matches(){return false;}closest(){return null;}
+  constructor(id=''){this.id=id;this._innerHTML='';this.textContent='';this.dataset={};this.style={};this.className='';this.value='';this.selectionStart=0;this.selectionEnd=0;this.isConnected=true;this.classList={add(){},remove(){},contains(){return false;}};}
+  get innerHTML(){return this._innerHTML;}set innerHTML(value){if(trackFocus&&this.id==='app'&&lastClick)lastClick.isConnected=false;if(trackFocus&&this.id==='overlay-root'&&testDocument?.activeElement?.insideOverlay){testDocument.activeElement.isConnected=false;testDocument.activeElement=testDocument.body;}this._innerHTML=value;}
+  setAttribute(){}querySelector(){if(trackFocus&&this.id==='overlay-root'&&this.innerHTML){const target=new Element();target.insideOverlay=true;return target;}return null;}querySelectorAll(){return [];}focus(){if(trackFocus&&testDocument){this.isConnected=true;testDocument.activeElement=this;}}blur(){if(trackFocus&&testDocument?.activeElement===this)testDocument.activeElement=testDocument.body;}select(){}setSelectionRange(){}scrollIntoView(){}matches(){return false;}closest(){return null;}
  }
  class TextArea extends Element{}
  class Canvas extends Element{
@@ -27,7 +30,7 @@ function fixture({deferInitialState=false,initialVisible=true,queuedAnimationFra
   constructor(){super();this.naturalWidth=imageRaster.width;this.naturalHeight=imageRaster.height;this.complete=true;}
   set src(value){imageLoads.push({url:value,crossOrigin:this.crossOrigin});if(this.onload)queueMicrotask(()=>this.onload());}
  }
- const document={body:new Element('body'),activeElement:null,querySelectorAll(){return[];},getElementById(id){if(!nodes.has(id))nodes.set(id,(id==='markup-canvas'||id==='capture-canvas')?new Canvas(id):new Element(id));return nodes.get(id);},createElement(tag){return tag==='canvas'?new Canvas():new Element();},querySelector(){return null;},addEventListener(name,listener){if(!listeners.has(name))listeners.set(name,[]);listeners.get(name).push(listener);}};
+ const document={body:new Element('body'),activeElement:null,querySelectorAll(){return[];},getElementById(id){if(!nodes.has(id))nodes.set(id,(id==='markup-canvas'||id==='capture-canvas')?new Canvas(id):new Element(id));return nodes.get(id);},createElement(tag){return tag==='canvas'?new Canvas():new Element();},querySelector(){return null;},addEventListener(name,listener){if(!listeners.has(name))listeners.set(name,[]);listeners.get(name).push(listener);}};testDocument=document;
  const image='00000000-0000-4000-8000-000000000001',text1='00000000-0000-4000-8000-000000000002',text2='00000000-0000-4000-8000-000000000003',link='00000000-0000-4000-8000-000000000004';
  const base=(id,kind,createdAt,extra)=>({id,kind,createdAt,updatedAt:createdAt,name:'',title:'',text:'',url:'',pinned:false,folderIds:[],tags:[],trashedAt:null,hiddenFromShelf:false,...extra});
  const state={items:[base(image,'image',1000,{name:'Synthetic image',...(imageDocument?{annotations:[],crop:null}:{}),mediaUrl:'appmedia://media/'+image,originalMediaUrl:'appmedia://media/'+image+'/original'}),base(text1,'text',900,{text:'Text one'}),base(text2,'text',800,{text:'Text two'}),base(link,'link',700,{url:'https://example.com/reference',title:'Reference link'})],folders:[],settings:{visibleKinds:['image','text','link'],retentionDays:{image:30,text:30,link:30},shortcuts:{toggle:'Control+Alt+Space',search:'Control+Alt+S'},localShortcuts:{},language:'en',theme:'soft',cardSize:'medium'},view:'shelves',version:'1.7.0',windowVisible:initialVisible,canUndo:false,canUndoTrash:false,libraryRevision:0};
@@ -36,6 +39,8 @@ function fixture({deferInitialState=false,initialVisible=true,queuedAnimationFra
  const clone=value=>structuredClone(value);
  const api={emit(patch){Object.assign(state,patch);subscriber?.(clone(state));},surface(patch){Object.assign(state,patch);subscriber?.({surfaceOnly:true,...clone(patch)});},state:async()=>{const initial=clone(state);if(deferInitialState)await new Promise(resolve=>{releaseInitialState=resolve;});return initial;},subscribe(fn){subscriber=fn;return()=>{};},async command(action,payload={}){commands.push({action,payload:clone(payload)});const selected=state.items.filter(item=>(payload.ids||[payload.id]).includes(item.id));
   let cleanupError,trashResult;if(action==='cleanup'){if(cleanupFailures){cleanupFailures--;cleanupError='Permanent deletion cleanup is still pending.';}else state.needsDeletionCleanup=false;}
+  // Runs the shipped export implementation and reports like main.cjs does.
+  if(action==='export'&&exporter){try{state.message=(await exporter(selected)).message;}catch(error){cleanupError=error.message;}}
   if(action==='editText'){if(editFailures){editFailures--;cleanupError='Synthetic draft write failure';}else selected.forEach(item=>item.text=payload.text);}
   if(action==='setSettings'){const patch=payload.patch||{},localShortcuts={...state.settings.localShortcuts,...patch.localShortcuts};for(const [action,value]of Object.entries(localShortcuts))if(value===null)delete localShortcuts[action];state.settings={...state.settings,...patch,localShortcuts};}
   if(action==='saveImage')selected.forEach(item=>{item.crop=clone(payload.crop);item.annotations=clone(payload.annotations);});
@@ -59,12 +64,12 @@ function fixture({deferInitialState=false,initialVisible=true,queuedAnimationFra
  vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../locales.js'),'utf8'),context,{filename:'locales.js'});vm.runInContext(fs.readFileSync(path.join(__dirname,'../lib/annotations.cjs'),'utf8'),context,{filename:'lib/annotations.cjs'});const engine=context.window.clipboardLineAnnotations,engineDraw=engine.drawAnnotations,drawn=[];engine.drawAnnotations=(ctx,annotations,options)=>{drawn.push({annotations:structuredClone(annotations),clip:options?.clip?structuredClone(options.clip):null,base:options?.base??null});return engineDraw(ctx,annotations,options);};vm.runInContext(fs.readFileSync(path.join(__dirname,'../renderer.js'),'utf8'),context,{filename:'renderer.js'});
  async function ready(){await new Promise(setImmediate);}
  async function key(code,{ctrl=false,alt=false,shift=false,key,target,composing=false,keyCode=0}={}){const event={code,key:key||(/^Key/.test(code)?code.slice(3).toLowerCase():code==='Space'?' ':code),ctrlKey:ctrl,metaKey:false,altKey:alt,shiftKey:shift,repeat:false,isComposing:composing,keyCode,target:target||new Element(),preventDefault(){this.prevented=true;}};for(const listener of listeners.get('keydown')||[])await listener(event);await ready();return event;}
- async function click(action,extra={}){const target=new Element();target.dataset.action=action;Object.assign(target.dataset,extra);target.closest=selector=>selector==='[data-action]'?target:null;for(const listener of listeners.get('click')||[])listener({target,stopPropagation(){}});await ready();}
+ async function click(action,extra={}){const target=new Element();target.dataset.action=action;Object.assign(target.dataset,extra);if(action==='record-local'||action==='record-global')target.id='settings-'+action+'-'+extra.keyAction;target.closest=selector=>selector==='[data-action]'?target:null;lastClick=target;if(trackFocus)target.focus();for(const listener of listeners.get('click')||[])listener({target,stopPropagation(){}});await ready();}
  async function pointer(type,x,y,{shift=false,canvas='markup-canvas'}={}){const target=document.getElementById(canvas);for(const listener of listeners.get(type)||[])listener({target,clientX:x,clientY:y,pointerId:1,shiftKey:shift,preventDefault(){}});await ready();}
  async function dispatch(type,{canvas='capture-canvas',...extra}={}){const target=document.getElementById(canvas),event={target,preventDefault(){this.prevented=true;},...extra};for(const listener of listeners.get(type)||[])await listener(event);await ready();return event;}
  async function input(id,value){const target=document.getElementById(id);target.value=value;target.selectionStart=value.length;for(const listener of listeners.get('input')||[])await listener({target});await ready();}
  async function change(id,value){const target=document.getElementById(id);target.value=value;for(const listener of listeners.get('change')||[])await listener({target});await ready();}
- return{drawn,outputConfig,get menu(){return nodes.get('output-menu-root')?.innerHTML||'';},async cardClick(id,{ctrl=false}={}){const card=new Element();card.dataset.itemId=id;card.closest=selector=>selector==='[data-item-id]'?card:null;for(const listener of listeners.get('click')||[])await listener({target:card,ctrlKey:ctrl,metaKey:false,shiftKey:false,stopPropagation(){}});await ready();},grid(columns){document.querySelectorAll=selector=>selector==='.library-grid > .card'?[...document.getElementById('app').innerHTML.matchAll(/<article class="[^"]*"[^>]*data-item-id="([^"]+)"/g)].map((match,index)=>({offsetTop:Math.floor(index/columns)*200,dataset:{itemId:match[1]}})):[];},editor(id){const node=document.getElementById(id);node.tagName='INPUT';node.matches=selector=>selector.includes('input');return node;},ready,key,dispatch,input,change,click,pointer,async blur(){for(const listener of listeners.get('window:blur')||[])listener();await ready();},imageLoads,paintCalls,markupCalls,animationFrames,flushAnimationFrames(){for(const fn of animationFrames.splice(0))fn();},releaseInitialState(){releaseInitialState?.();},deferReply(action){let release;const promise=new Promise(resolve=>{release=resolve;});delayedReply={action,promise};return release;},deferImageBroadcast({surface=true}={}){deferredImageBroadcast={surface};},releaseImageBroadcast(){const next=pendingImageBroadcast;pendingImageBroadcast=null;if(next)subscriber?.(next);},failExportOnce(){exportFailures++;},failCleanupOnce(){cleanupFailures++;},failEditOnce(){editFailures++;},state,commands,nodes,image,text1,text2,link,api,get main(){return nodes.get('app').innerHTML;},get overlay(){return nodes.get('overlay-root').innerHTML;}};
+ return{drawn,outputConfig,get menu(){return nodes.get('output-menu-root')?.innerHTML||'';},async cardClick(id,{ctrl=false}={}){const card=new Element();card.dataset.itemId=id;card.closest=selector=>selector==='[data-item-id]'?card:null;for(const listener of listeners.get('click')||[])await listener({target:card,ctrlKey:ctrl,metaKey:false,shiftKey:false,stopPropagation(){}});await ready();},grid(columns){document.querySelectorAll=selector=>selector==='.library-grid > .card'?[...document.getElementById('app').innerHTML.matchAll(/<article class="[^"]*"[^>]*data-item-id="([^"]+)"/g)].map((match,index)=>({offsetTop:Math.floor(index/columns)*200,dataset:{itemId:match[1]}})):[];},editor(id){const node=document.getElementById(id);node.tagName='INPUT';node.matches=selector=>selector.includes('input');return node;},ready,key,dispatch,input,change,click,pointer,async blur(){for(const listener of listeners.get('window:blur')||[])listener();await ready();},imageLoads,paintCalls,markupCalls,animationFrames,flushAnimationFrames(){for(const fn of animationFrames.splice(0))fn();},releaseInitialState(){releaseInitialState?.();},deferReply(action){let release;const promise=new Promise(resolve=>{release=resolve;});delayedReply={action,promise};return release;},deferImageBroadcast({surface=true}={}){deferredImageBroadcast={surface};},releaseImageBroadcast(){const next=pendingImageBroadcast;pendingImageBroadcast=null;if(next)subscriber?.(next);},failExportOnce(){exportFailures++;},failCleanupOnce(){cleanupFailures++;},failEditOnce(){editFailures++;},state,commands,nodes,image,text1,text2,link,api,get main(){return nodes.get('app').innerHTML;},get overlay(){return nodes.get('overlay-root').innerHTML;},get focused(){return document.activeElement;},get lastClick(){return lastClick;}};
 }
 
 function selectedCards(f){return [...f.main.matchAll(/<article class="([^"]*)"[^>]*data-item-id="([^"]+)"/g)].filter(match=>match[1].split(' ').includes('selected')).map(match=>match[2]);}
@@ -109,6 +114,12 @@ test('an initial library older than a queued lightweight revision is refreshed b
 
 test('preview arrows move across shelf kinds, S keeps preview on neighbor, Backspace restores',async()=>{const f=fixture();await f.ready();await f.key('Space');await f.key('ArrowDown');assert.match(f.overlay,/aria-label="Text one"/);await f.key('KeyS');assert.match(f.overlay,/aria-label="Text two"/);assert.ok(f.state.items.find(item=>item.id===f.text1).trashedAt);await f.key('Backspace');assert.match(f.overlay,/aria-label="Text one"/);assert.equal(f.state.items.find(item=>item.id===f.text1).trashedAt,null);});
 
+test('Undo take down that leaves a copied-again text in Trash keeps the selection and preview where they are',async()=>{
+ const f=fixture();await f.ready();await f.key('Space');await f.key('ArrowDown');await f.key('KeyS');assert.match(f.overlay,/aria-label="Text two"/);
+ const command=f.api.command;f.api.command=async(action,payload)=>action==='undo'?structuredClone(f.state):command(action,payload);
+ await f.key('Backspace');assert.ok(f.state.items.find(item=>item.id===f.text1).trashedAt);assert.match(f.overlay,/aria-label="Text two"/);assert.doesNotMatch(f.overlay,/empty-preview/);assert.deepEqual(selectedCards(f),[f.text2]);
+});
+
 test('removing the final preview item keeps an empty Undo view and Backspace restores that exact item',async()=>{
  for(const pinned of [false,true]){
   const f=fixture();await f.ready();f.api.emit({items:[{...f.state.items[0],pinned}]});await f.ready();await f.key('Space');await f.key('KeyS');
@@ -143,6 +154,11 @@ test('native hide clears clean preview and does not leave it on the next opening
 
 test('editor requests anonymous CORS before loading managed original',async()=>{const f=fixture();await f.ready();await f.key('Space');await f.key('KeyC');assert.equal(f.imageLoads.length,1);assert.equal(f.imageLoads[0].crossOrigin,'anonymous');assert.match(f.imageLoads[0].url,/\/original$/);});
 
+test('a click without a drag in crop mode leaves the image uncropped like macOS',async()=>{
+ const f=fixture({imageDocument:true});await f.ready();await f.key('Space');await f.key('KeyC');
+ await f.pointer('pointerdown',300,100);await f.pointer('pointerup',300,100);await f.key('Enter');
+ assert.deepEqual(f.commands.filter(value=>value.action==='saveImage'),[]);
+});
 test('canvas export rejection retains dirty crop and explicit Enter retry saves it',async()=>{const f=fixture();await f.ready();await f.key('Space');await f.key('KeyC');await f.pointer('pointerdown',60,30);await f.pointer('pointermove',500,150);await f.pointer('pointerup',500,150);f.failExportOnce();await f.key('Enter');assert.match(f.overlay,/id="markup-canvas"/);assert.equal(f.commands.filter(command=>command.action==='saveImage').length,0);assert.match(f.nodes.get('toast').textContent,/Image changes could not be saved/);await f.key('Enter');assert.doesNotMatch(f.overlay,/id="markup-canvas"/);assert.deepEqual(f.state.items.find(item=>item.id===f.image).crop,{x:60,y:30,width:440,height:120});});
 
 for(const ordering of ['broadcast before reply','reply before broadcast','unrelated surface before reply'])test('preview crop undo and redo survive '+ordering,async()=>{
@@ -329,34 +345,42 @@ test('late Hide response cannot replace a newer native global search opening',as
 test('shared macOS/Windows shelf contract runs through actual renderer handlers',async()=>{
  const contractFile=path.resolve(__dirname,'../../contracts/shelf-behavior.json'),raw=fs.readFileSync(contractFile),contract=JSON.parse(raw);
  assert.equal(contract.schemaVersion,1);assert.equal(contract.contractId,'clipboardline.shelves.v1');
- const observations=[],errors=[];
- for(const scenario of contract.scenarios){
-  const f=fixture();await f.ready();const aliases=new Map(),values=contract.itemSets[scenario.itemSet].map((entry,index)=>{
+ const observations=[],errors=[],directories=[],{Store}=require('../lib/model.cjs');
+ try{for(const scenario of contract.scenarios){
+  const f=fixture();await f.ready();let store=null;const links=new Map(),aliases=new Map(),values=contract.itemSets[scenario.itemSet].map((entry,index)=>{
    const id='20000000-0000-4000-8000-'+String(index+1).padStart(12,'0');aliases.set(id,entry.id);
    const source=f.state.items.find(value=>value.kind===entry.kind);
    return{...structuredClone(source),id,createdAt:10000-index,name:entry.kind==='image'?entry.text:'',text:entry.kind==='text'?entry.text:'',title:entry.kind==='link'?entry.text:'',url:entry.kind==='link'?'https://example.com/contract/'+entry.id:''};
   });
+  const kinds=new Map(contract.itemSets[scenario.itemSet].map(entry=>[entry.id,entry.kind]));
   f.api.emit({items:values,settings:{...f.state.settings,visibleKinds:scenario.visibleKinds}});await f.ready();
   for(const kind of scenario.pinnedOnlyKinds||[])await f.click('pinned-kind',{kind});
   await f.api.command('hide');await f.ready();
   for(let index=0;index<scenario.steps.length;index++){
-   const step=scenario.steps[index];const editor=f.nodes.get('search-input');if(editor)editor.matches=selector=>selector.includes('input');
-   const searchEditing=/class="search-hud"/.test(f.main);
+   const step=scenario.steps[index],commandsBefore=f.commands.length;const editor=f.nodes.get('search-input');if(editor)editor.matches=selector=>selector.includes('input');
+   const searchEditing=/class="search-hud"/.test(f.main);let copied=null;
    if(step.action==='open')await f.api.command('show');
    else if(step.action==='close')await f.api.command('hide');
    else if(step.action==='remap'){const localShortcuts={...f.state.settings.localShortcuts};if(step.key===null)delete localShortcuts[step.binding];else localShortcuts[step.binding]=step.key==='KeyX'?'X':step.key;f.api.emit({settings:{...f.state.settings,localShortcuts}});}
    else if(step.action==='key')await f.key(step.code,searchEditing?{target:editor}:{});
    else if(['up','down','left','right'].includes(step.action))await f.key({up:'ArrowUp',down:'ArrowDown',left:'ArrowLeft',right:'ArrowRight'}[step.action],searchEditing?{target:editor}:{});
    else if(step.action==='toggle')await f.key({image:'KeyI',text:'KeyT',link:'KeyL'}[step.kind],{shift:true});
+   else if(step.action==='switchShelf')await f.key('Tab');
+   else if(step.action==='command')await f.key(step.code,step.ctrl?{ctrl:true}:{});
    else if(step.action==='openSearch')await f.key('KeyS',{shift:true});
    else if(step.action==='finishSearch')await f.key('Enter',{target:editor});
+   else if(step.action==='copyLink'){
+    if(!store){const directory=fs.mkdtempSync(path.join(os.tmpdir(),'clipboardline-shelf-contract-'));directories.push(directory);store=new Store(directory);}
+    const item=store.insert('link',step.url);if(!links.has(item.id))links.set(item.id,'link-'+(links.size+1));copied={link:{item:links.get(item.id),address:item.url}};
+   }
    else throw new Error('Unsupported shared contract action: '+step.action);
    await f.ready();
-   const actual={activeKind:activeKind(f),focused:aliases.get(focusedCard(f))||null,selected:selectedCards(f).map(id=>aliases.get(id)||id).sort(),visibleKinds:[...f.main.matchAll(/<section class="shelf(?: active-shelf)?\s*" data-shelf="([^"]+)"/g)].map(match=>match[1]),searchEditing:/class="search-hud"/.test(f.main)};
-   observations.push({scenarioId:scenario.id,step:index,actual});
-   try{assert.deepEqual(actual,step.expect);}catch(error){errors.push(scenario.id+' step '+index+': '+error.message);}
+   const active=activeKind(f),focusedAlias=aliases.get(focusedCard(f)),actual={activeKind:active,focused:kinds.get(focusedAlias)===active?focusedAlias:null,selected:selectedCards(f).map(id=>aliases.get(id)||id).sort(),visibleKinds:[...f.main.matchAll(/<section class="shelf(?: active-shelf)?\s*" data-shelf="([^"]+)"/g)].map(match=>match[1]),searchEditing:/class="search-hud"/.test(f.main)};
+   if(step.action==='command')actual.effects=[...f.commands.slice(commandsBefore).map(value=>value.action),...(f.overlay?[/id="markup-canvas"/.test(f.overlay)?'markup':'preview']:[])];
+   const reported=copied||actual;observations.push({scenarioId:scenario.id,step:index,actual:reported});
+   try{assert.deepEqual(reported,step.expect);}catch(error){errors.push(scenario.id+' step '+index+': '+error.message);}
   }
- }
+ }}finally{for(const directory of directories)fs.rmSync(directory,{recursive:true,force:true});}
  if(process.env.CLIPBOARDLINE_PARITY_REPORT){
   const revision=process.env.GITHUB_SHA||execFileSync('git',['rev-parse','HEAD'],{cwd:path.resolve(__dirname,'../..'),encoding:'utf8'}).trim();
   const implementationSHA256=crypto.createHash('sha256').update(fs.readFileSync(path.resolve(__dirname,'../renderer.js'))).digest('hex');
@@ -613,6 +637,12 @@ test('recording a fallback letter detects a conflicting legacy lowercase remap',
  assert.match(f.overlay,/Record shortcut/);assert.match(f.nodes.get('toast').textContent,/already used for Take down/);assert.equal(f.state.settings.localShortcuts.pin,undefined);
  await f.key('Escape');
 });
+test('recording a key that a preview uses for another action is a conflict like macOS',async()=>{
+ const f=fixture();await f.ready();await f.api.command('settings');await f.ready();
+ await f.click('record-local',{keyAction:'remove'});await f.key('KeyO',{ctrl:true});await f.click('confirm-modal');
+ assert.match(f.overlay,/Record shortcut/);assert.match(f.nodes.get('toast').textContent,/already used for Open in browser/);assert.equal(f.state.settings.localShortcuts.remove,undefined);
+ await f.key('Escape');
+});
 
 test('recording the same legacy lowercase global binding keeps its exact registration value',async()=>{
  const f=fixture();await f.ready();f.api.emit({settings:{...f.state.settings,shortcuts:{...f.state.settings.shortcuts,search:'Control+Alt+s'}}});await f.ready();await f.api.command('settings');await f.ready();
@@ -708,6 +738,17 @@ test('IME composing Enter Escape and arrows stay native in Library search, text 
   for(const code of ['Enter','Escape','ArrowDown'])assert.equal((await modal.key(code,{...ime,target:query})).prevented,undefined);
   assert.match(modal.overlay,/aria-label="Pin to folder"/);assert.equal(modal.nodes.get('modal-query').value,'Synthetic composing folder');assert.equal(modal.commands.length,modalCommands);
  }
+});
+
+test('closing a Settings shortcut recorder restores focus to its opening control',async()=>{
+ const contract=JSON.parse(fs.readFileSync(path.join(__dirname,'../../contracts/shortcut-recording.json'),'utf8'));
+ const policy=contract.nativeExceptions?.find(entry=>entry.id==='shortcut-recorder-return-focus');
+ assert.ok(policy,'The cross-platform shortcut recorder contract must document native focus return');
+ assert.match(policy.windows,/Record button/);
+ assert.match(policy.macos,/NSPanel/);
+ const f=fixture({trackFocus:true});await f.ready();await f.api.command('settings');await f.ready();await f.click('settings-tab',{tab:'shortcuts'});await f.click('record-local',{keyAction:'pin'});assert.match(f.main,/id="settings-record-local-pin"/);
+ const trigger=f.lastClick;assert.ok(f.focused?.insideOverlay);assert.notEqual(f.focused,trigger);
+ await f.key('Escape');assert.equal(f.overlay,'');assert.equal(f.focused?.id,trigger.id);assert.notEqual(f.focused,trigger);assert.equal(f.focused?.isConnected,true);
 });
 
 test('an old shortcut save completion cannot close a newer recorder or release its owned global-shortcut lease',async()=>{
@@ -1200,4 +1241,124 @@ test('capture toolbar Extract text button commits without copying then extracts 
 test('image preview Extract text button runs extractText on the previewed image',async()=>{
  const f=fixture();await f.ready();await f.key('Space');assert.match(f.overlay,/data-action="output-extract-text"/);await f.click('output-extract-text');
  assert.deepEqual(outputCommands(f).map(value=>[value.action,value.payload]),[['outputRun',{id:f.image,action:'extractText'}]]);
+});
+
+test('a capture crop owns Enter before the next render tick can copy and hide the shelves',async()=>{
+ const f=fixture();await f.ready();
+ f.api.emit({viewEvent:{serial:'immediate-capture-crop',selectId:f.image,kind:'image',preview:true,crop:true}});
+ await f.key('Enter');
+ assert.equal(f.commands.filter(value=>value.action==='copy').length,0,'Enter belongs to the capture crop immediately');
+ assert.equal(f.state.windowVisible,true,'Applying the crop keeps its preview open');
+ await f.ready();
+ assert.doesNotMatch(f.overlay,/id="markup-canvas"/,'An unchanged crop finishes back in preview');
+ await f.key('Enter');
+ assert.equal(f.commands.filter(value=>value.action==='copy').length,1,'Enter in the finished preview copies normally');
+ assert.equal(f.state.windowVisible,false);
+});
+
+test('export and shortcut-conflict notices follow the selected language',async()=>{
+ const directory=fs.mkdtempSync(path.join(os.tmpdir(),'clipboardline-export-notice-')),png=path.join(directory,'source.png'),missing='00000000-0000-4000-8000-000000000005';
+ try{
+  fs.writeFileSync(png,Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==','base64'));
+  const output=path.join(directory,'export');fs.mkdirSync(output);
+  const f=fixture({exporter:selected=>exportCopies(selected,output,{mediaPath:id=>{if(id===missing)throw new Error('Image unavailable');return png;}})});await f.ready();
+  f.api.emit({settings:{...f.state.settings,language:'tr'},items:[...f.state.items,{...structuredClone(f.state.items[0]),id:missing,name:'Missing image',createdAt:500,updatedAt:500}]});await f.ready();
+  await f.key('KeyA',{ctrl:true});await f.key('KeyE',{ctrl:true,shift:true});await f.ready();
+  const exportCommand=f.commands.find(value=>value.action==='export');assert.equal(exportCommand.payload.ids.length,2);
+  assert.deepEqual(fs.readdirSync(output),['Synthetic image.png']);
+  assert.equal(f.state.message,'Exported 1 · failed 1');
+  assert.equal(f.nodes.get('toast').textContent,'1 dışa aktarıldı · 1 başarısız');
+  f.api.emit({message:'Copied'});await f.ready();assert.equal(f.nodes.get('toast').textContent,'Kopyalandı');
+  f.api.emit({message:'Synthetic untranslated notice'});await f.ready();assert.equal(f.nodes.get('toast').textContent,'Synthetic untranslated notice');
+  await f.api.command('settings');await f.ready();await f.click('record-local',{keyAction:'pin'});await f.key('KeyS');await f.click('confirm-modal');
+  assert.equal(f.nodes.get('toast').textContent,"Bu kısayol Çöp Kutusu'na taşı için zaten kullanılıyor");
+ }finally{fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+test('after unpinning the focused card in pinned-only mode, the next arrow selects the first remaining card like macOS',async()=>{
+ const f=fixture();await f.ready();const values=navigationItems(f,{image:4,text:0,link:0}).image.map(value=>({...value,pinned:true}));f.api.emit({items:values});await f.ready();
+ await f.key('KeyF');assert.equal(focusedCard(f),values[0].id);
+ await f.key('KeyP');assert.equal(f.state.items.find(value=>value.id===values[0].id).pinned,false);
+ await f.key('ArrowRight');assert.equal(focusedCard(f),values[1].id);
+});
+test('Tab onto an empty shelf leaves copy, take down, pin and preview with nothing to act on',async()=>{
+ const f=fixture();await f.ready();f.api.emit({items:f.state.items.filter(value=>value.kind!=='text')});await f.ready();
+ await f.key('Tab');assert.equal(activeKind(f),'text');const commands=f.commands.length;
+ for(const [code,extra]of [['Enter',{}],['KeyS',{}],['KeyP',{}],['Space',{}],['KeyC',{ctrl:true}]])await f.key(code,extra);
+ assert.deepEqual(f.commands.slice(commands),[]);assert.equal(f.overlay,'');assert.equal(f.state.items.find(value=>value.id===f.image).trashedAt,null);assert.equal(f.state.windowVisible,true);
+});
+test('Library selection counts use the shared "%d selected" catalog entry in the chosen language',async()=>{
+ const f=fixture();await f.ready();await f.key('KeyP');await f.key('ArrowDown');await f.key('KeyP');await f.api.command('library');await f.ready();await f.key('KeyA',{ctrl:true});
+ for(const [language,expected]of [['tr','2 seçili'],['es','2 seleccionadas'],['zh-Hans','已选择 2 项'],['en','2 selected']]){f.api.emit({settings:{...f.state.settings,language}});await f.ready();assert.match(f.main,new RegExp('<span>'+expected+'</span>'),language);assert.match(f.main,new RegExp('<h2>'+expected+'</h2>'),language+' inspector');await f.click('add-to-folder');assert.match(f.overlay,new RegExp('<p>'+expected+' · '),language+' folder picker');await f.click('close-modal');}
+});
+for(const row of [{code:'ArrowUp',key:'ArrowUp',saved:'Control+Alt+Up'},{code:'ArrowLeft',key:'ArrowLeft',shift:true,saved:'Control+Alt+Shift+Left'},{code:'Equal',key:'+',shift:true,saved:'Control+Alt+Shift+Plus'}])test('global recorder saves Electron accelerator names for DOM-only keys: '+JSON.stringify(row),async()=>{
+ const f=fixture();await f.ready();await f.api.command('settings');await f.ready();await f.click('record-global',{keyAction:'search'});
+ await f.key(row.code,{key:row.key,ctrl:true,alt:true,shift:!!row.shift});await f.click('confirm-modal');
+ assert.equal(f.commands.filter(value=>value.action==='setSettings').at(-1).payload.patch.shortcuts.search,row.saved);
+});
+test('Settings shortcut filter matches the displayed localized action titles as well as the English ones',async()=>{
+ const f=fixture();await f.ready();await f.api.command('settings');f.api.emit({settings:{...f.state.settings,language:'tr'}});await f.ready();await f.click('settings-tab',{tab:'shortcuts'});
+ const rows=()=>[...f.main.matchAll(/data-action="record-local" data-key-action="([^"]+)"/g)].map(match=>match[1]);
+ await f.input('shortcut-filter','kopyala');assert.ok(rows().includes('copy'));assert.ok(!rows().includes('pin'));
+ await f.input('shortcut-filter','Sabitle');assert.ok(rows().includes('pin'));assert.ok(!rows().includes('copy'));
+ await f.input('shortcut-filter','copy');assert.ok(rows().includes('copy'));
+});
+test('the empty-selection toast uses the shared "Select an item first" catalog entry',async()=>{
+ const f=fixture();await f.ready();
+ f.api.emit({items:[],settings:{...f.state.settings,language:'tr'}});await f.ready();await f.key('KeyC',{ctrl:true});
+ assert.equal(f.nodes.get('toast').textContent,'Önce bir öğe seç');
+});
+test('the Move to Trash confirmation uses the shared localized catalog entry',async()=>{
+ const f=fixture();await f.ready();await keyboardSaved(f);
+ f.api.emit({settings:{...f.state.settings,language:'tr'}});await f.ready();await f.click('trash');
+ assert.match(f.overlay,/1 içerik geri alınabilir Çöp’e taşınsın mı\?/);
+ f.api.emit({settings:{...f.state.settings,language:'en'}});await f.click('close-modal');await f.click('trash');
+ assert.match(f.overlay,/Move 1 items to recoverable Trash\?/);
+});
+
+test('shelf M opens focused photo for marker drawing and Escape saves editable marks',async()=>{
+ const f=fixture();await f.ready();
+ const other={...structuredClone(f.state.items.find(value=>value.id===f.image)),id:'20000000-0000-4000-8000-000000000099',name:'Another photo',mediaUrl:'appmedia://media/20000000-0000-4000-8000-000000000099/image'};
+ f.api.emit({items:[other,...f.state.items]});await f.ready();await f.cardClick(f.image);assert.equal(focusedCard(f),f.image);
+ await f.key('KeyM');assert.match(f.overlay,/id="markup-canvas"/);assert.ok(f.imageLoads.at(-1).url.includes(f.image));
+ await f.key('KeyH');await f.pointer('pointerdown',60,40);await f.pointer('pointermove',250,100);await f.pointer('pointerup',250,100);
+ await f.key('Escape');const saved=f.state.items.find(value=>value.id===f.image);
+ assert.equal(saved.annotations.length,1);assert.equal(saved.annotations[0].type,'marker');assert.ok(saved.annotations[0].points.length>=2);
+ assert.doesNotMatch(f.overlay,/id="markup-canvas"/);await f.key('Escape');await f.key('KeyM');
+ await f.key('Escape');assert.equal(f.state.items.find(value=>value.id===f.image).annotations[0].type,'marker');
+ });
+
+test('shelf markup does not consume M in native editors or open text and link items',async()=>{
+ for(const name of ['search-input','detail-note','modal-value']){
+  const f=fixture();await f.ready();const editor=f.editor(name);const event=await f.key('KeyM',{target:editor});
+  assert.ok(!event.prevented,name);assert.equal(f.overlay,'');assert.equal(f.commands.length,0);
+ }
+ for(const kind of ['text','link']){
+  const f=fixture();await f.ready();await f.cardClick(kind==='text'?f.text1:f.link);await f.key('KeyM');assert.equal(f.overlay,'');
+ }
+ const f=fixture();await f.ready();f.api.emit({settings:{...f.state.settings,localShortcuts:{markup:'X'}}});await f.ready();
+ await f.key('KeyM');assert.equal(f.overlay,'');await f.key('KeyX');assert.match(f.overlay,/id="markup-canvas"/);
+ await f.key('Escape');await f.key('Escape');f.api.emit({settings:{...f.state.settings,localShortcuts:{markup:''}}});await f.ready();
+ await f.key('KeyM');await f.key('KeyX');assert.equal(f.overlay,'');
+ });
+test('Take down of a ctrl-selected pair continues right of the removed focus like macOS',async()=>{
+ const f=fixture();await f.ready();const values=navigationItems(f,{image:6,text:0,link:0}).image;f.api.emit({items:values});await f.ready();
+ await f.cardClick(values[2].id,{ctrl:true});assert.deepEqual(selectedCards(f),[values[0].id,values[2].id]);assert.equal(focusedCard(f),values[2].id);
+ await f.key('KeyS');assert.equal(focusedCard(f),values[3].id);assert.deepEqual(selectedCards(f),[values[3].id]);
+});
+test('the corner cross on another card keeps the focused card like macOS',async()=>{
+ const f=fixture();await f.ready();const values=navigationItems(f,{image:6,text:0,link:0}).image;f.api.emit({items:values});await f.ready();
+ await f.key('ArrowRight');assert.equal(focusedCard(f),values[1].id);
+ await f.click('card-remove',{id:values[0].id});assert.ok(f.state.items.find(value=>value.id===values[0].id).trashedAt||f.state.items.find(value=>value.id===values[0].id).hiddenFromShelf);
+ assert.equal(focusedCard(f),values[1].id);assert.deepEqual(selectedCards(f),[values[1].id]);
+});
+test('Take down shows the page of the card it focuses next',async()=>{
+ const f=fixture();await f.ready();const values=navigationItems(f,{image:25,text:0,link:0}).image;f.api.emit({items:values});await f.ready();
+ for(let index=0;index<9;index++)await f.key('ArrowRight',{shift:true});assert.equal(focusedCard(f),values[9].id);
+ await f.key('KeyS');assert.equal(focusedCard(f),values[10].id);assert.deepEqual(selectedCards(f),[values[10].id]);
+});
+test('the corner cross keeps an unselected focus selected',async()=>{
+ const f=fixture();await f.ready();const values=navigationItems(f,{image:6,text:0,link:0}).image;f.api.emit({items:values});await f.ready();
+ await f.cardClick(values[1].id,{ctrl:true});await f.cardClick(values[1].id,{ctrl:true});assert.equal(focusedCard(f),values[1].id);assert.deepEqual(selectedCards(f),[values[0].id]);
+ await f.click('card-remove',{id:values[0].id});assert.equal(focusedCard(f),values[1].id);assert.deepEqual(selectedCards(f),[values[1].id]);
 });
