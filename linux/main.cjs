@@ -28,6 +28,8 @@ const {PasteTargetTracker}=require('./lib/paste-target.cjs');
 const {DragFiles}=require('./lib/drag-files.cjs');
 const {thumbnailFetch,linkMetadata} = require('./lib/network.cjs');
 const {Updates,AutomaticUpdateScheduler} = require('./lib/updates.cjs');
+const {updatesSupported,publicUpdateState}=require('./lib/update-channel.cjs');
+const UPDATES_SUPPORTED=updatesSupported(process.platform);
 const {GlobalShortcuts,createLinuxShortcutRegistry}=require('./lib/global-shortcuts.cjs');
 const {ImageSearch,modelPaths}=require('./lib/image-search.cjs');
 const {createOcrQueue}=require('./lib/ocr-queue.cjs');
@@ -92,7 +94,7 @@ async function readSemanticImage(id){
  const resized=image.getSize();return{bitmap:image.toBitmap(),width:resized.width,height:resized.height};
 }
 
-function state(result,{surfaceOnly=false}={}) { const light=surfaceOnly&&lastBroadcastLibraryRevision===store.revision;return {...(light?{surfaceOnly:true}:store.publicState()),libraryRevision:store.revision,version:app.getVersion(),build:BUILD_NUMBER,platform:process.platform,development,view,windowMode:(view==='shelves'||view==='capture')?'overlay':'normal',windowMaximized:window?.isMaximized()||false,windowVisible:desiredVisible&&(window?.isVisible()||false),shortcutRecordingToken:shortcutRecording?.token||null,pendingCapture:pendingCapture?{id:pendingCapture.id,dataUrl:pendingCapture.dataUrl,width:pendingCapture.width,height:pendingCapture.height}:null,message:message||store.privacyWarning||'',viewEvent,imageSearch:{...(imageSearch?.state||{available:false,indexing:false,pending:0,revision:0})},update:{...updates.state},...(result===undefined?{}:{result})}; }
+function state(result,{surfaceOnly=false}={}) { const light=surfaceOnly&&lastBroadcastLibraryRevision===store.revision;return {...(light?{surfaceOnly:true}:store.publicState()),libraryRevision:store.revision,version:app.getVersion(),build:BUILD_NUMBER,platform:process.platform,development,view,windowMode:(view==='shelves'||view==='capture')?'overlay':'normal',windowMaximized:window?.isMaximized()||false,windowVisible:desiredVisible&&(window?.isVisible()||false),shortcutRecordingToken:shortcutRecording?.token||null,pendingCapture:pendingCapture?{id:pendingCapture.id,dataUrl:pendingCapture.dataUrl,width:pendingCapture.width,height:pendingCapture.height}:null,message:message||store.privacyWarning||'',viewEvent,imageSearch:{...(imageSearch?.state||{available:false,indexing:false,pending:0,revision:0})},update:publicUpdateState(updates.state,process.platform),...(result===undefined?{}:{result})}; }
 function broadcast({surfaceOnly=false}={}) {
   // Visibility and native bounds do not change library content. Retain the
   // renderer's existing rows instead of cloning and sending the full history
@@ -110,7 +112,7 @@ const announce=createAnnouncer({visible:()=>desiredVisible&&!!window?.isVisible(
 function openUpdates(){return show('settings',{settingsTab:'updates'});}
 function refreshTray(){
   if(closing||!tray||tray.isDestroyed()||!trayPresentation||!store)return;
-  trayPresentation.refresh({items:store.data.items,settings:store.data.settings,updateVersion:updates?.manifest?.version,systemLocale:app.getLocale()});
+  trayPresentation.refresh({items:store.data.items,settings:store.data.settings,updateVersion:UPDATES_SUPPORTED?updates?.manifest?.version:undefined,systemLocale:app.getLocale()});
 }
 function createTray(){
   if(tray)return;
@@ -118,12 +120,13 @@ function createTray(){
   trayPresentation=new StatusTray({tray,createIcon:summary=>trayIcon(nativeImage,appIcon(),summary),createMenu:summary=>{
     const t=(key,...values)=>translated(summary.language,key,...values);
     return Menu.buildFromTemplate([{id:'tray-show',label:t('Show line'),click:()=>show('shelves')},{id:'tray-mini',label:t('Mini clipboard')||'Mini Pano (Alt+Meta+V)',click:()=>show('mini')},{id:'tray-library',label:t('Library'),click:()=>show('library')},{id:'tray-capture',label:t('Screenshots'),click:()=>capture()},{id:'tray-settings',label:t('Settings'),click:()=>show('settings')},
-      ...(summary.updateVersion?[{id:'tray-update',label:t('Update available')+': '+summary.updateVersion+'…',click:openUpdates}]:[]),{id:'tray-check',label:t('Check for updates…'),click:async()=>{await openUpdates();await updates.check();}},{type:'separator'},{id:'tray-quit',label:t('Quit %@','ClipBoardLine'),click:()=>app.quit()}]);
+      ...(UPDATES_SUPPORTED?[...(summary.updateVersion?[{id:'tray-update',label:t('Update available')+': '+summary.updateVersion+'…',click:openUpdates}]:[]),{id:'tray-check',label:t('Check for updates…'),click:async()=>{await openUpdates();await updates.check();}}]:[]),{type:'separator'},{id:'tray-quit',label:t('Quit %@','ClipBoardLine'),click:()=>app.quit()}]);
   }});
   refreshTray();tray.on('click',()=>desiredVisible?hide():show('shelves'));
 }
 
 function updateAvailable(manifest){
+  if(!UPDATES_SUPPORTED)return;
   refreshTray();if(testMode||!store.data.settings.autoCheckUpdates||!Notification.isSupported())return;
   const notice=new Notification({title:'ClipBoardLine update available',body:`ClipBoardLine ${manifest.version} is ready. Click to review and install.`,silent:true});notice.on('click',()=>void openUpdates());notice.show();
 }
@@ -547,6 +550,8 @@ function configureWatchers() {
   const folders=[...new Set([...store.data.settings.watchFolders,...defaultDirs.filter(d=>{try{return fs.statSync(d).isDirectory();}catch{return false;}})])];
   for(const folder of folders){try{if(!fs.statSync(folder).isDirectory())continue;const timers=new Map();const watcher=fs.watch(folder,(_event,name)=>{if(!name||!/[.](png|jpe?g|webp|bmp|mov|mp4)$/i.test(name)||name.startsWith('.'))return;clearTimeout(timers.get(name));timers.set(name,setTimeout(()=>{timers.delete(name);try{const file=path.join(folder,path.basename(name));if(output?.ownsFile(file))return;const item=importFile(file);Promise.resolve(item).then(record=>{broadcast();if(store.data.settings.openAfterScreenshot)void show('shelves',{selectId:record.id,kind:'image',freshlyCaptured:true});}).catch(err=>{console.warn('Watch folder import error:',err?.message||err);});}catch(err){console.warn('Watch folder item error:',err?.message||err);}},700));});watcher.on('error',err=>{console.warn('Watch folder watcher error:',err?.message||err);});watchers.push(watcher);}catch(err){console.warn('Watch folder configure error:',err?.message||err);}}
 }
+// English catalog titles (the Settings rows) so the renderer can localize a failed-restore notice.
+const SHORTCUT_TITLES={toggle:'Show or hide the line',search:'Search shelves from other apps',library:'Open library',copyLatest:'Copy latest image',screenshot:'Screenshot',mini:'Open mini clipboard'};
 let shortcutRegistry,shortcutRecording=null;
 function finishShortcutRecording(token=null){
   if(!shortcutRecording||(token!==null&&shortcutRecording.token!==token))return;
@@ -578,7 +583,7 @@ function configureShortcuts(previousPreferences=null) {
   if(rejected.length){
     if(previousPreferences)store.modify('setSettings',{patch:{shortcuts:Object.fromEntries(rejected.map(value=>[value.action,previousPreferences[value.action]||'']))}});
     const unrestored=rejected.filter(value=>value.restorationFailed).map(value=>value.action);
-    message='Shortcut '+rejected.map(value=>value.shortcut).join(', ')+' is unavailable. '+(unrestored.length?'Could not restore: '+unrestored.join(', ')+'.':rejected.some(value=>value.previous)?'Working previous shortcuts are kept.':'Choose another combination in Settings.');
+    message='Shortcut '+rejected.map(value=>value.shortcut).join(', ')+' is unavailable. '+(unrestored.length?'Could not restore: '+unrestored.map(action=>SHORTCUT_TITLES[action]||action).join(', ')+'.':rejected.some(value=>value.previous)?'Working previous shortcuts are kept.':'Choose another combination in Settings.');
   }
   return rejected;
 }
@@ -671,7 +676,7 @@ async function command(action,payload={}) {
     result={canceled:true};
   }
   else if(action==='newNote'){result={id:store.createNote(payload).id};}
-  else if(action==='import'){const response=await dialog.showOpenDialog(window,{properties:['openFile','multiSelections'],filters:[{name:'Images, recordings and text',extensions:['png','jpg','jpeg','webp','bmp','mov','mp4','txt','md']}]});const imported=[],failures=[];for(const file of response.filePaths){try{const item=await importFile(file);imported.push(item.id);if(item.kind==='link')void enrich(item.id);}catch(error){failures.push(path.basename(file)+': '+error.message);}}result={ids:imported,failed:failures.length};if(failures.length)message=(imported.length?`Imported ${imported.length} · failed ${failures.length}. `:'')+failures[0];}
+  else if(action==='import'){const response=await dialog.showOpenDialog(window,{properties:['openFile','multiSelections'],filters:[{name:'Images, recordings and text',extensions:['png','jpg','jpeg','webp','bmp','mov','mp4','txt','md']}]});const imported=[],failures=[];for(const file of response.filePaths){try{const item=await importFile(file);imported.push(item.id);if(item.kind==='link')void enrich(item.id);}catch(error){failures.push(path.basename(file)+': '+error.message);}}result={ids:imported,failed:failures.length};if(failures.length)message=`Imported ${imported.length} · failed ${failures.length}. ${failures[0]}`;}
   else if(action==='searchImages'){if(!imageSearch)throw new Error('Offline image search is unavailable.');result=await imageSearch.search(payload.query,payload.eligibleIds);}
   else if(action==='ocr')result=await ocr(payload.id);
   // Failures are announced inside handle (notification while hidden, toast while visible).
@@ -699,13 +704,13 @@ async function command(action,payload={}) {
     store.modify('setSettings',{patch});if(wasIndexingImages&&!store.data.settings.indexImages)ocrQueue.discardPending();if(Object.hasOwn(patch,'retentionDays'))refreshImageSearch();if(Object.hasOwn(patch,'shortcuts')&&configureShortcuts(previousShortcuts).length)result={error:message};
     if(['captureText','captureImages','captureLinks'].some(key=>Object.hasOwn(patch,key)))lastFingerprint='';
     if(Object.hasOwn(patch,'launchAtLogin')&&!testMode)app.setLoginItemSettings({openAtLogin:patch.launchAtLogin,args:['--hidden']});
-    if(Object.hasOwn(patch,'autoCheckUpdates')&&patch.autoCheckUpdates&&!development)void updateScheduler.tick({force:true});
+    if(Object.hasOwn(patch,'autoCheckUpdates')&&patch.autoCheckUpdates&&!development&&UPDATES_SUPPORTED)void updateScheduler.tick({force:true});
   }else if(action==='watchFolder'||action==='chooseWatchFolder'){const response=await dialog.showOpenDialog(window,{properties:['openDirectory']});if(response.filePaths[0]){store.modify('setSettings',{patch:{watchFolders:[...store.data.settings.watchFolders,response.filePaths[0]]}});configureWatchers();}}
   else if(action==='unwatchFolder'){const index=payload.index;if(!Number.isInteger(index)||index<0||index>=store.data.settings.watchFolders.length)throw new Error('Invalid watched folder');store.modify('setSettings',{patch:{watchFolders:store.data.settings.watchFolders.filter((_v,i)=>i!==index)}});configureWatchers();}
-  else if(action==='checkUpdates'||action==='refreshUpdates'){if(development)updates.set({status:'development',message:'Development builds use a separate library. Install an official release to use its signed update channel.'});else await updates.check({force:action==='checkUpdates'});}
+  else if(action==='checkUpdates'||action==='refreshUpdates'){if(!UPDATES_SUPPORTED){/* Linux: the Windows channel is off; the state packet explains why. */}else if(development)updates.set({status:'development',message:'Development builds use a separate library. Install an official release to use its signed update channel.'});else await updates.check({force:action==='checkUpdates'});}
   else if(action==='installUpdate'){
     if(development)throw new Error('Development builds cannot install official updates.');
-    if(process.platform!=='win32')throw new Error('Windows installer can run only on Windows.');
+    if(!UPDATES_SUPPORTED)throw new Error('Windows installer can run only on Windows.');
     await updates.install(launchInstaller);app.quit();
   }else if(action==='quit')app.quit();
   else throw new Error('Unknown command');
@@ -732,7 +737,7 @@ else app.whenReady().then(async()=>{
     print:file=>printWithWindow(file,{BrowserWindow,directory:output.tempDirectory}),
     ocr:(id,languages)=>ocr(id,true,languages)});
   mediaJobs=new MediaJobs({directory:path.join(store.directory,'media-jobs')});try{dragFiles=new DragFiles(store.directory);}catch{}updates=new Updates(path.join(store.directory,'updates'),{build:BUILD_NUMBER,version:app.getVersion(),changed:()=>broadcast(),available:updateAvailable});
-  updateScheduler=new AutomaticUpdateScheduler(updates,{enabled:()=>!development&&!testMode&&store.data.settings.autoCheckUpdates});
+  updateScheduler=new AutomaticUpdateScheduler(updates,{enabled:()=>UPDATES_SUPPORTED&&!development&&!testMode&&store.data.settings.autoCheckUpdates});
   const searchPaths=modelPaths({packaged:app.isPackaged,resourcesPath:process.resourcesPath,sourceDirectory:__dirname});
   let ortModule=null,runtimeDirectory=null;try{ortModule=require.resolve('onnxruntime-web/wasm').replace(/app[.]asar([\\/])/,'app.asar.unpacked$1');runtimeDirectory=path.dirname(ortModule);}catch{}
   imageSearch=new ImageSearch({...searchPaths,ortModule,runtimeDirectory,cacheDirectory:path.join(store.directory,'image-search'),items:()=>store.data.items,readImage:readSemanticImage,changed:()=>broadcast()});refreshImageSearch();
@@ -797,9 +802,9 @@ else app.whenReady().then(async()=>{
     },120);
     edgeTimer.unref?.();
     retentionTimer=setInterval(()=>{store.expire();refreshImageSearch();broadcast();},3600000);
-    updateTimer=setInterval(()=>void updateScheduler.tick(),60000);
+    if(UPDATES_SUPPORTED){updateTimer=setInterval(()=>void updateScheduler.tick(),60000);
     updateLaunchTimer=setTimeout(()=>void updateScheduler.tick(),10000);updateLaunchTimer.unref();
-    powerMonitor.on('resume',()=>void updateScheduler.tick());
+    powerMonitor.on('resume',()=>void updateScheduler.tick());}
   }
   const startHidden = process.argv.some(arg => ['--hidden', '--tray', '--daemon', '--startup'].includes(arg));
   if (!startHidden) {

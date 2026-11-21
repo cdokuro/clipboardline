@@ -34,3 +34,11 @@ test('truncating exported names preserves complete Unicode characters',async()=>
   ]);
   assert.deepEqual(names,['a'.repeat(99)+'.txt','b'.repeat(98)+emoji+'.txt']);
 });
+
+test('an export without failures reports only the exported count',async()=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'clipboardline-export-'));
+  try{
+    const result=await exportCopies([{kind:'text',name:'a',text:'x'},{kind:'text',name:'b',text:'y'}],directory,{mediaPath:()=>''});
+    assert.deepEqual(result,{count:2,failed:0,message:'Exported 2'});
+  }finally{fs.rmSync(directory,{recursive:true,force:true});}
+});

@@ -1362,3 +1362,26 @@ test('the corner cross keeps an unselected focus selected',async()=>{
  await f.cardClick(values[1].id,{ctrl:true});await f.cardClick(values[1].id,{ctrl:true});assert.equal(focusedCard(f),values[1].id);assert.deepEqual(selectedCards(f),[values[0].id]);
  await f.click('card-remove',{id:values[0].id});assert.equal(focusedCard(f),values[1].id);assert.deepEqual(selectedCards(f),[values[1].id]);
 });
+
+test('on Linux the Updates tab explains the Linux update source and offers no Windows check or install',async()=>{
+ const f=fixture();await f.ready();await f.api.command('settings');await f.ready();
+ f.api.emit({update:{status:'unsupported',supported:false,busy:false,canInstall:false,availableVersion:null,message:'This Linux build updates from its own repository (feat/linux-support). The Windows update channel is turned off.'}});await f.ready();
+ await f.click('settings-tab',{tab:'updates'});
+ assert.match(f.main,/Linux build updates from its own repository/);
+ assert.match(f.main,/data-action="check-updates"[^>]*disabled/);
+ assert.doesNotMatch(f.main,/data-action="install-update"/);
+ assert.doesNotMatch(f.main,/Windows uses its own signed installer channel/);
+ await f.click('check-updates');assert.equal(f.commands.filter(value=>value.action==='checkUpdates').length,0);
+});
+
+test('Turkish main-process notices: import, export, shortcut restore and folder errors are localized',async()=>{
+ const f=fixture();await f.ready();f.api.emit({settings:{...f.state.settings,language:'tr'}});await f.ready();
+ const toast=async message=>{f.api.emit({message});await f.ready();return f.nodes.get('toast').textContent;};
+ assert.equal(await toast('Exported 3'),'3 dışa aktarıldı');
+ assert.equal(await toast('Imported 2 · failed 1. notes.txt: Text file exceeds import limit'),'2 içe aktarıldı · 1 başarısız. notes.txt: Metin dosyası içe aktarma sınırını aşıyor');
+ assert.equal(await toast('Shortcut Alt+Shift+S is unavailable. Could not restore: Open library, Screenshot.'),'Alt+Shift+S kısayolu kullanılamıyor. Geri yüklenemedi: Kütüphaneyi aç, Ekran görüntüsü.');
+ assert.equal(await toast('Shortcut Alt+Shift+S is unavailable. Working previous shortcuts are kept.'),'Alt+Shift+S kısayolu kullanılamıyor. Çalışan önceki kısayollar korundu.');
+ assert.equal(await toast('A folder with this name already exists'),'Bu adda bir klasör zaten var');
+ assert.equal(await toast('Invalid folder name'),'Geçersiz klasör adı');
+ assert.equal(await toast('Restore this item first.'),'Önce bu öğeyi geri getir.');
+});

@@ -18,6 +18,6 @@ async function exportCopies(selected,directory,{mediaPath}){
     exported++;}catch{failed++;}
   }
   if(!exported)throw new Error('Could not export copies');
-  return{count:exported,failed,message:`Exported ${exported} · failed ${failed}`};
+  return{count:exported,failed,message:failed?`Exported ${exported} · failed ${failed}`:`Exported ${exported}`};
 }
 module.exports={exportCopies};
