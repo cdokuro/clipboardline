@@ -125,3 +125,9 @@ test('failed cycle rollback identifies a previously owned key that the OS could 
  assert.deepEqual([...f.callbacks.keys()].sort(),[before.search,before.library].sort());
  assert.equal(errors.length,1);
 });
+
+test('a recorded plus key (saved by globalAccelerator as Plus) maps to Qt Key_Plus for kglobalaccel',()=>{
+ const {qtKeyCode}=require('../lib/global-shortcuts.cjs');
+ assert.equal(qtKeyCode('Control+Alt+Plus'),(0x04000000|0x08000000|0x2b)>>>0);
+ assert.equal(qtKeyCode('Plus'),0x2b);
+});
