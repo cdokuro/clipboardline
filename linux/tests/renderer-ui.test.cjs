@@ -1191,3 +1191,13 @@ test('Turkish palette shows the translated unavailable reason',async()=>{
  await f.key('KeyE',{ctrl:true});await f.key('Escape');await f.key('KeyK',{ctrl:true});
  assert.match(f.overlay,/QR kod taraması için zbarimg \(zbar\) gerekli\./);assert.match(f.overlay,/Paylaşım için KDE Purpose \(qml6\) gerekli\./);
 });
+
+// ---- Direct "Extract text" buttons (Spectacle shows Extract Text on the toolbar)
+test('capture toolbar Extract text button commits without copying then extracts text',async()=>{
+ const f=await outputCaptureFixture('tr');const needle='data-action="capture-output" data-output="extractText"';const at=f.main.indexOf(needle);assert.ok(at>0,needle);assert.ok(f.main.slice(at,at+300).includes('Metni çıkar'));
+ await f.click('capture-output',{output:'extractText'});assert.equal(captureCommit(f)[0].payload.copy,false);assert.deepEqual(outputCommands(f).map(value=>[value.action,value.payload]),[['outputRun',{id:CAPTURED,action:'extractText'}]]);
+});
+test('image preview Extract text button runs extractText on the previewed image',async()=>{
+ const f=fixture();await f.ready();await f.key('Space');assert.match(f.overlay,/data-action="output-extract-text"/);await f.click('output-extract-text');
+ assert.deepEqual(outputCommands(f).map(value=>[value.action,value.payload]),[['outputRun',{id:f.image,action:'extractText'}]]);
+});
