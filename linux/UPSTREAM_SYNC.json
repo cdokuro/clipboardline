@@ -1,0 +1,13 @@
+{
+  "upstream": "orkunisitmak/clipboardline",
+  "path": "windows",
+  "syncedCommit": "f3f4f89f934c2aff4961d27d632d25149e937f0f",
+  "syncedAt": "2026-11-21",
+  "skipped": [],
+  "rulings": [
+    {"file": "main.cjs", "decision": "Clipboard capture keeps the Linux daemon queue with content-fingerprint dedupe; upstream's per-generation dedupe (repeatedGeneration) is not used because Klipper re-assertions arrive as new daemon events."},
+    {"file": "main.cjs", "decision": "OCR keeps prepareOcrLanguages (any installed language, async). Upstream's SHA-256 model verification is not taken: it hashes whole model files synchronously on the main thread and only knows the bundled eng/tur files. cacheMethod 'none' and stale .traineddata removal are taken (removal made async)."},
+    {"file": "main.cjs", "decision": "Default Linux screenshot folders, output.ownsFile suppression and --hidden login item stay; upstream's watcher error logging is added."},
+    {"file": "lib/native.cjs", "decision": "Linux daemon-socket monitor stays; it now calls the new optional ready() callback on connect."}
+  ]
+}
