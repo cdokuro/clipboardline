@@ -5,9 +5,25 @@
   "syncedAt": "2026-11-21",
   "skipped": [],
   "rulings": [
-    {"file": "main.cjs", "decision": "Clipboard capture keeps the Linux daemon queue with content-fingerprint dedupe; upstream's per-generation dedupe (repeatedGeneration) is not used because Klipper re-assertions arrive as new daemon events."},
-    {"file": "main.cjs", "decision": "OCR keeps prepareOcrLanguages (any installed language, async). Upstream's SHA-256 model verification is not taken: it hashes whole model files synchronously on the main thread and only knows the bundled eng/tur files. cacheMethod 'none' and stale .traineddata removal are taken (removal made async)."},
-    {"file": "main.cjs", "decision": "Default Linux screenshot folders, output.ownsFile suppression and --hidden login item stay; upstream's watcher error logging is added."},
-    {"file": "lib/native.cjs", "decision": "Linux daemon-socket monitor stays; it now calls the new optional ready() callback on connect."}
+    {
+      "file": "main.cjs",
+      "decision": "Clipboard capture keeps the Linux daemon queue with content-fingerprint dedupe (lastFingerprint); upstream's per-generation dedupe (repeatedGeneration) is not used because Klipper re-assertions arrive as new daemon events. Consequence: on Linux an identical copy made right after the previous one is still dropped, so upstream's 're-copy moves to top / re-adds a deleted item' only happens when some other copy came in between."
+    },
+    {
+      "file": "main.cjs",
+      "decision": "OCR model hash check dropped (sync hashing). Upstream verifies the SHA-256 of eng/tur .traineddata.gz with readFileSync+hash on the main thread before OCR; the Linux port keeps prepareOcrLanguages (async, any installed tessdata, system models gzip-compressed locally, so fixed hashes would not match). Trade-off: a corrupted or tampered model in ocr-models/ is not detected and OCR may fail or return garbage until that file is deleted. cacheMethod 'none' and async stale .traineddata removal are taken."
+    },
+    {
+      "file": "main.cjs",
+      "decision": "Default Linux screenshot folders, output.ownsFile suppression and --hidden login item stay; upstream's watcher error logging is added."
+    },
+    {
+      "file": "lib/native.cjs",
+      "decision": "Linux daemon-socket monitor stays; it now calls the new optional ready() callback on connect."
+    },
+    {
+      "file": "main.cjs, lib/update-channel.cjs",
+      "decision": "The Windows update channel (windows-update.json, signed .exe installer) is disabled on Linux: no scheduler, notification, tray entries, check or install; the Updates tab says the Linux build updates from its own repository."
+    }
   ]
 }
