@@ -163,7 +163,7 @@ async function getLinuxClipboardImage() {
   return null;
 }
 
-function monitor(changed, failed, focused = () => {}) {
+function monitor(changed, failed, focused = () => {}, ready = () => {}) {
   if (process.platform === 'linux') {
     let alive = true;
     let client = null;
@@ -196,6 +196,7 @@ function monitor(changed, failed, focused = () => {}) {
         client.on('connect', () => {
           socketConnected = true;
           reconnectDelay = 250;
+          try { ready(); } catch {}
           if (fallbackTimer) {
             clearInterval(fallbackTimer);
             fallbackTimer = null;
@@ -317,7 +318,7 @@ function monitor(changed, failed, focused = () => {}) {
   let buffer=''; child.stdout.on('data',chunk => {
     buffer += chunk.toString(); if (buffer.length > 64000) { child.kill(); return; }
     let newline;
-    while ((newline=buffer.indexOf('\n')) >= 0) { const line=buffer.slice(0,newline);buffer=buffer.slice(newline+1);try { const v=JSON.parse(line); if(v.clipboardQuery!==undefined){queries.receive(v);}else if(Number.isInteger(v.sequence)) changed(v.sequence); if(v.focus) focused(v.focus); } catch {} }
+    while ((newline=buffer.indexOf('\n')) >= 0) { const line=buffer.slice(0,newline);buffer=buffer.slice(newline+1);try { const v=JSON.parse(line); if(v.clipboardQuery!==undefined){queries.receive(v);}else if(Number.isInteger(v.sequence)) changed(v.sequence); if(v.focus) focused(v.focus); if(v.ready===true) ready(); } catch {} }
   });
   child.on('error',error=>{stopped();failed(error);}); child.on('exit',code => { stopped();if(code) failed(new Error('Native clipboard monitor stopped.')); }); return child;
 }
