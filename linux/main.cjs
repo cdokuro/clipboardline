@@ -647,7 +647,7 @@ function openGoogleLensInBrowser(imageObj, lang='tr') {
   const actionUrl = `https://lens.google.com/v3/upload?hl=${hl}&stcs=${Date.now()}&ep=ccm&re=df`;
   const dims = `${finalSize.width},${finalSize.height}`;
   const label = lang === 'tr' ? "Google Lens'e gönderiliyor…" : 'Sending image to Google Lens…';
-  const html = `<!doctype html><html lang="${hl}"><head><meta charset="utf-8"><title>Google Lens — ClipBoardLine</title>
+  const html = `<!doctype html><html lang="${hl}"><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Google Lens — ClipBoardLine</title>
 <style>body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#16171d;color:#e6e8f0;font:500 15px/1.5 system-ui,-apple-system,sans-serif}.card{display:flex;align-items:center;gap:12px;padding:14px 20px;border-radius:12px;background:#21232d;border:1px solid rgba(255,255,255,.08);box-shadow:0 12px 32px rgba(0,0,0,.35)}.spin{width:18px;height:18px;border:2.5px solid rgba(255,255,255,.2);border-top-color:#7c9cff;border-radius:50%;animation:s .7s linear infinite}@keyframes s{to{transform:rotate(360deg)}}</style></head>
 <body><div class="card"><div class="spin"></div><span>${label}</span></div>
 <form id="f" method="POST" action="${actionUrl}" enctype="multipart/form-data" style="display:none">
@@ -674,7 +674,12 @@ try {
     let settled = false;
     const server = http.createServer((req, res) => {
       if (req.method === 'GET' && req.url === `/lens/${token}`) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Content-Security-Policy': 'sandbox allow-scripts allow-forms allow-top-navigation',
+          'Referrer-Policy': 'no-referrer',
+          'Cache-Control': 'no-store'
+        });
         res.end(html);
         setTimeout(() => { try { server.close(); } catch {} }, 1500).unref?.();
         return;
