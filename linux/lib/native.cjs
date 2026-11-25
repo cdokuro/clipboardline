@@ -320,7 +320,7 @@ function monitor(changed, failed, focused = () => {}, ready = () => {}) {
     let newline;
     while ((newline=buffer.indexOf('\n')) >= 0) { const line=buffer.slice(0,newline);buffer=buffer.slice(newline+1);try { const v=JSON.parse(line); if(v.clipboardQuery!==undefined){queries.receive(v);}else if(Number.isInteger(v.sequence)) changed(v.sequence); if(v.focus) focused(v.focus); if(v.ready===true) ready(); } catch {} }
   });
-  child.on('error',error=>{stopped();failed(error);}); child.on('exit',code => { stopped();if(code) failed(new Error('Native clipboard monitor stopped.')); }); return child;
+  child.on('error',error=>{stopped();failed(error);}); child.on('exit',(code,signal) => { stopped();if(!child.killed&&signal!=='SIGTERM') failed(new Error('Native clipboard monitor stopped (code ' + code + ').')); }); return child;
 }
 
 module.exports = {
