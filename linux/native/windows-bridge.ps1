@@ -3,10 +3,12 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName Accessibility
+Add-Type -AssemblyName System.Drawing
 $automationReferences = @(
   [System.Windows.Automation.ClientSettings].Assembly.Location
   [System.Windows.Automation.AutomationIdentifier].Assembly.Location
   [Accessibility.IAccessible].Assembly.Location
+  [System.Drawing.Bitmap].Assembly.Location
   [System.Collections.Generic.HashSet[int]].Assembly.Location
   [System.Diagnostics.Stopwatch].Assembly.Location
 ) | Select-Object -Unique
@@ -273,10 +275,84 @@ public static class ClipBoardLineNative {
   public static void EmitCurrentFocus() { try { EmitFocus(FocusSnapshot()); } catch(Exception) {} }
   public static void EmitSequence(uint sequence) { lock(outputLock) { Console.Out.WriteLine("{\"sequence\":"+sequence+"}");Console.Out.Flush(); } }
   public static void EmitReady() { lock(outputLock) { Console.Out.WriteLine("{\"ready\":true}");Console.Out.Flush(); } }
+  public static void EnableDpiAwareness() {
+    try { SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch(Exception) {}
+  }
+  public static void ObserveClicks() {
+    var thread=new System.Threading.Thread(delegate() {
+      try {
+        GetAsyncKeyState(0x01); GetAsyncKeyState(0x02); GetAsyncKeyState(0x04);
+        bool prevDown=false;
+        while(true) {
+          short l=GetAsyncKeyState(0x01);
+          short r=GetAsyncKeyState(0x02);
+          short m=GetAsyncKeyState(0x04);
+          bool down=((l&0x8000)!=0)||((r&0x8000)!=0)||((m&0x8000)!=0);
+          bool clicked=((l&0x0001)!=0)||((r&0x0001)!=0)||((m&0x0001)!=0);
+          if((down&&!prevDown)||(!down&&clicked)) {
+            POINT pt;
+            if(GetCursorPos(out pt)) {
+              lock(outputLock) {
+                Console.Out.WriteLine("{\"clickPoint\":{\"x\":"+pt.X+",\"y\":"+pt.Y+"}}");
+                Console.Out.Flush();
+              }
+            }
+          }
+          prevDown=down;
+          System.Threading.Thread.Sleep(25);
+        }
+      } catch(Exception) {}
+    });
+    thread.IsBackground=true;
+    thread.Start();
+  }
+  private static bool CaptureRegionBgra(int x,int y,int width,int height,string outPath) {
+    if(width<=0||height<=0||width>16384||height>16384||string.IsNullOrEmpty(outPath))return false;
+    using(var bmp=new System.Drawing.Bitmap(width,height,System.Drawing.Imaging.PixelFormat.Format32bppRgb)) {
+      using(var g=System.Drawing.Graphics.FromImage(bmp)) {
+        IntPtr hdcDest=g.GetHdc();
+        IntPtr hdcSrc=GetDC(IntPtr.Zero);
+        try {
+          if(!BitBlt(hdcDest,0,0,width,height,hdcSrc,x,y,0x00CC0020|0x40000000)&&!BitBlt(hdcDest,0,0,width,height,hdcSrc,x,y,0x00CC0020))return false;
+        } finally {
+          ReleaseDC(IntPtr.Zero,hdcSrc);
+          g.ReleaseHdc(hdcDest);
+        }
+      }
+      var rect=new System.Drawing.Rectangle(0,0,width,height);
+      var data=bmp.LockBits(rect,System.Drawing.Imaging.ImageLockMode.ReadOnly,System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+      try {
+        int stride=width*4;
+        byte[] bytes=new byte[stride*height];
+        if(data.Stride==stride) {
+          Marshal.Copy(data.Scan0,bytes,0,bytes.Length);
+        } else {
+          for(int row=0;row<height;row++) {
+            Marshal.Copy(IntPtr.Add(data.Scan0,row*data.Stride),bytes,row*stride,stride);
+          }
+        }
+        for(int i=3;i<bytes.Length;i+=4)bytes[i]=255;
+        System.IO.File.WriteAllBytes(outPath,bytes);
+        return true;
+      } finally {
+        bmp.UnlockBits(data);
+      }
+    }
+  }
   public static void ObserveSequenceQueries() {
     var reader=new System.Threading.Thread(delegate() {
       try {
         string line;while((line=Console.In.ReadLine())!=null) {
+          if(line.StartsWith("capture-screen|",StringComparison.Ordinal)) {
+            var parts=line.Split(new[]{'|'},7);
+            long qid;int cx,cy,cw,ch;
+            if(parts.Length==7&&long.TryParse(parts[1],out qid)&&int.TryParse(parts[2],out cx)&&int.TryParse(parts[3],out cy)&&int.TryParse(parts[4],out cw)&&int.TryParse(parts[5],out ch)) {
+              bool ok=false;
+              try { ok=CaptureRegionBgra(cx,cy,cw,ch,parts[6]); } catch(Exception) { ok=false; }
+              lock(outputLock) {Console.Out.WriteLine("{\"captureScreenQuery\":"+qid+",\"ok\":"+(ok?"true":"false")+",\"width\":"+cw+",\"height\":"+ch+"}");Console.Out.Flush();}
+            }
+            continue;
+          }
           const string prefix="clipboard-sequence:";long id;
           if(!line.StartsWith(prefix,StringComparison.Ordinal)||!long.TryParse(line.Substring(prefix.Length),out id)||id<=0||id>9007199254740991L)continue;
           uint sequence=GetClipboardSequenceNumber();
@@ -285,6 +361,12 @@ public static class ClipBoardLineNative {
       } catch(System.IO.IOException) {} catch(ObjectDisposedException) {}
     });reader.IsBackground=true;reader.Start();
   }
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+  [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+  [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT pt);
+  [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+  [DllImport("gdi32.dll")] public static extern bool BitBlt(IntPtr hdcDest, int xDest, int yDest, int w, int h, IntPtr hdcSrc, int xSrc, int ySrc, int rop);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
   [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
@@ -349,7 +431,9 @@ try {
   } elseif ($Mode -eq 'ClipboardSequence') {
     @{ok=$true;sequence=[ClipBoardLineNative]::GetClipboardSequenceNumber()} | ConvertTo-Json -Compress
   } elseif ($Mode -eq 'Monitor') {
+    [ClipBoardLineNative]::EnableDpiAwareness()
     [ClipBoardLineNative]::ObserveSequenceQueries()
+    [ClipBoardLineNative]::ObserveClicks()
     [ClipBoardLineNative]::ObserveFocus()
     # The clipboard present at launch is never reported, even when its sequence is 0; only later changes are.
     $last = [ClipBoardLineNative]::GetClipboardSequenceNumber()
