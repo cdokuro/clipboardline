@@ -29,6 +29,8 @@ const {DragFiles}=require('./lib/drag-files.cjs');
 const {thumbnailFetch,linkMetadata} = require('./lib/network.cjs');
 const {Updates,AutomaticUpdateScheduler} = require('./lib/updates.cjs');
 const {updatesSupported,publicUpdateState}=require('./lib/update-channel.cjs');
+const productionOverride = process.argv.includes('--production') || process.env.CLIPBOARDLINE_PRODUCTION === '1';
+if(productionOverride && !app.isPackaged) process.env.CLIPBOARDLINE_DISABLE_UPDATES = '1';
 const UPDATES_SUPPORTED=updatesSupported(process.platform);
 const {GlobalShortcuts,createLinuxShortcutRegistry}=require('./lib/global-shortcuts.cjs');
 const {ImageSearch,modelPaths}=require('./lib/image-search.cjs');
@@ -43,15 +45,19 @@ const testMode = process.argv.includes('--test-mode');
 const testFolder = process.argv.find(value=>value.startsWith('--test-data='))?.slice('--test-data='.length);
 const testTray=testMode&&!!testFolder&&process.argv.includes('--test-tray');
 if(testMode && testFolder) app.setPath('userData',path.resolve(testFolder));
-const development=!app.isPackaged&&!testMode;
+const development=!app.isPackaged&&!testMode&&!productionOverride;
 if(development){const directory=path.join(app.getPath('appData'),'ClipBoardLine Dev');fs.mkdirSync(directory,{recursive:true,mode:0o700});app.setPath('userData',directory);}
+else if(productionOverride&&!app.isPackaged){const directory=path.join(app.getPath('appData'),'ClipBoardLine');fs.mkdirSync(directory,{recursive:true,mode:0o700});app.setPath('userData',directory);}
 if(process.platform==='linux'&&!testMode&&process.env.WAYLAND_DISPLAY){
   app.commandLine.appendSwitch('ozone-platform','wayland');
 }
-// The tray app stays resident. On Linux Chromium's network service already runs
-// unsandboxed (--service-sandbox-type=none), so a separate utility process only
-// adds ~12 MB of private memory and buys no isolation. Host it in-process.
-if(process.platform==='linux')app.commandLine.appendSwitch('enable-features','NetworkServiceInProcess2');
+// The tray app stays resident. Host network service in-process and trim unused
+// Chromium media/router features to keep background RAM footprint lightweight.
+app.commandLine.appendSwitch('enable-features','NetworkServiceInProcess2');
+if(process.platform==='win32'){
+  app.commandLine.appendSwitch('disable-features','HardwareMediaKeyHandling,MediaRouter,CalculateNativeWinOcclusion');
+  app.commandLine.appendSwitch('js-flags','--max-old-space-size=192');
+}
 app.setName(development?'ClipBoardLine Dev':'ClipBoardLine');
 protocol.registerSchemesAsPrivileged([{scheme:'appmedia',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true,stream:true}}]);
 let window,store,tray,trayPresentation,updates,updateScheduler,monitor,clipboardTimer,retentionTimer,updateTimer,updateLaunchTimer,previous=null,view='shelves',message='',viewEvent=null;
@@ -546,7 +552,9 @@ async function recognize(id,quiet=false,languages=INDEX_LANGUAGES) {
 function configureWatchers() {
   for(const watcher of watchers)watcher.close();watchers=[];
   const home=require('node:os').homedir();
-  const defaultDirs=process.platform==='linux'?[path.join(home,'Pictures','Screenshots'),path.join(home,'Resimler','Ekran Görüntüleri'),path.join(home,'Resimler','Screenshots')]:[];
+  const defaultDirs=process.platform==='linux'
+    ?[path.join(home,'Pictures','Screenshots'),path.join(home,'Resimler','Ekran Görüntüleri'),path.join(home,'Resimler','Screenshots')]
+    :(process.platform==='win32'?[path.join(home,'Pictures','Screenshots'),path.join(home,'OneDrive','Pictures','Screenshots'),path.join(home,'OneDrive','Resimler','Ekran Görüntüleri')]:[]);
   const folders=[...new Set([...store.data.settings.watchFolders,...defaultDirs.filter(d=>{try{return fs.statSync(d).isDirectory();}catch{return false;}})])];
   for(const folder of folders){try{if(!fs.statSync(folder).isDirectory())continue;const timers=new Map();const watcher=fs.watch(folder,(_event,name)=>{if(!name||!/[.](png|jpe?g|webp|bmp|mov|mp4)$/i.test(name)||name.startsWith('.'))return;clearTimeout(timers.get(name));timers.set(name,setTimeout(()=>{timers.delete(name);try{const file=path.join(folder,path.basename(name));if(output?.ownsFile(file))return;const item=importFile(file);Promise.resolve(item).then(record=>{broadcast();if(store.data.settings.openAfterScreenshot)void show('shelves',{selectId:record.id,kind:'image',freshlyCaptured:true});}).catch(err=>{console.warn('Watch folder import error:',err?.message||err);});}catch(err){console.warn('Watch folder item error:',err?.message||err);}},700));});watcher.on('error',err=>{console.warn('Watch folder watcher error:',err?.message||err);});watchers.push(watcher);}catch(err){console.warn('Watch folder configure error:',err?.message||err);}}
 }
@@ -703,7 +711,10 @@ async function command(action,payload={}) {
     const previousShortcuts={...store.data.settings.shortcuts};
     store.modify('setSettings',{patch});if(wasIndexingImages&&!store.data.settings.indexImages)ocrQueue.discardPending();if(Object.hasOwn(patch,'retentionDays'))refreshImageSearch();if(Object.hasOwn(patch,'shortcuts')&&configureShortcuts(previousShortcuts).length)result={error:message};
     if(['captureText','captureImages','captureLinks'].some(key=>Object.hasOwn(patch,key)))lastFingerprint='';
-    if(Object.hasOwn(patch,'launchAtLogin')&&!testMode)app.setLoginItemSettings({openAtLogin:patch.launchAtLogin,args:['--hidden']});
+    if(Object.hasOwn(patch,'launchAtLogin')&&!testMode){
+      if(!app.isPackaged&&process.platform==='win32')app.setLoginItemSettings({openAtLogin:patch.launchAtLogin,path:process.execPath,args:[__dirname,'--production','--hidden']});
+      else app.setLoginItemSettings({openAtLogin:patch.launchAtLogin,args:['--hidden']});
+    }
     if(Object.hasOwn(patch,'autoCheckUpdates')&&patch.autoCheckUpdates&&!development&&UPDATES_SUPPORTED)void updateScheduler.tick({force:true});
   }else if(action==='watchFolder'||action==='chooseWatchFolder'){const response=await dialog.showOpenDialog(window,{properties:['openDirectory']});if(response.filePaths[0]){store.modify('setSettings',{patch:{watchFolders:[...store.data.settings.watchFolders,response.filePaths[0]]}});configureWatchers();}}
   else if(action==='unwatchFolder'){const index=payload.index;if(!Number.isInteger(index)||index<0||index>=store.data.settings.watchFolders.length)throw new Error('Invalid watched folder');store.modify('setSettings',{patch:{watchFolders:store.data.settings.watchFolders.filter((_v,i)=>i!==index)}});configureWatchers();}
