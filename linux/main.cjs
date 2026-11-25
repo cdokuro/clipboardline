@@ -65,7 +65,7 @@ let window,store,tray,trayPresentation,updates,githubUpdates,updateScheduler,mon
 let lastFingerprint='',ownFingerprint='',showing=0,closing=false,watchers=[],normalBounds=null,normalMaximized=false,applyingBounds=false;
 const clipboardQueue=[];let processingClipboard=false;
 let pastePromise=null,hidePromise=null,pasteGeneration=0;
-let lastBroadcastLibraryRevision=-1,windowSurface=null,pendingCapture=null;
+let lastBroadcastLibraryRevision=-1,windowSurface=null,pendingCapture=null,lastClickDisplayId=null;
 let visibilityGeneration=0,desiredVisible=false;
 const shelfMotion=new MotionBridge(value=>{if(window&&!window.isDestroyed())window.webContents.send('clipboardline:shelf-motion',value);});
 const windowBounds=new WindowBounds();
@@ -221,6 +221,18 @@ function getActiveDisplay(cursor=null){
   }
   return screen.getPrimaryDisplay();
 }
+function getCaptureDisplay(){
+  if(typeof screen!=='undefined'){
+    const displays=screen.getAllDisplays();
+    if(displays.length<=1)return displays[0]||screen.getPrimaryDisplay();
+    if(lastClickDisplayId!=null){
+      const clicked=displays.find(d=>d.id===lastClickDisplayId);
+      if(clicked)return clicked;
+    }
+    return getActiveDisplay(getCursorPosition());
+  }
+  return screen.getPrimaryDisplay();
+}
 async function show(next='shelves',event=null) {
   cancelRecordingTrims();
   if(pastePromise){pasteGeneration++;cancelNativePaste();}
@@ -241,7 +253,8 @@ async function show(next='shelves',event=null) {
     if(next!=='capture')pendingCapture=null;
     rememberNormalBounds();view=next;message='';
     const cursor=getCursorPosition();
-    const display=getActiveDisplay(cursor);
+    const requestedDisplay=event?.displayId!=null?screen.getAllDisplays().find(d=>d.id===event.displayId):null;
+    const display=requestedDisplay||getActiveDisplay(cursor);
     const isOverlay=next==='shelves'||next==='mini';
     let mousePos=null;
     if(next==='mini'&&cursor&&Number.isFinite(cursor.x)&&Number.isFinite(cursor.y)){
@@ -266,7 +279,10 @@ async function show(next='shelves',event=null) {
       const boundsChanged=!windowBounds.same(currentBounds,bounds);
       if(process.platform==='linux'&&!testMode&&window.isVisible()&&(!window.isFocused()||windowSurface!==surface||previousView!==next||boundsChanged))window.hide();
       if(windowSurface!==surface){window.setMinimumSize(isFullOverlay?1:640,isFullOverlay?1:360);window.setResizable(!isFullOverlay);window.setMaximizable(!isFullOverlay);window.setSkipTaskbar(isFullOverlay);window.setBackgroundColor(isOverlay?'#00000000':isCapture?'#000000':'#18191d');window.setHasShadow(!isFullOverlay);window.setAlwaysOnTop((process.platform==='linux'&&!testMode)||isFullOverlay,isCapture?'screen-saver':'normal');windowSurface=surface;}
+      const unlockResize=boundsChanged&&isFullOverlay&&!window.isResizable();
+      if(unlockResize)window.setResizable(true);
       windowBounds.apply(window,bounds,{overlay:isFullOverlay});
+      if(unlockResize)window.setResizable(false);
       if(!isFullOverlay&&normalMaximized)window.maximize();
     }finally{applyingBounds=false;}
     const animate=next==='shelves'&&(!window.isVisible()||wasClosing||previousView==='capture');
@@ -513,8 +529,31 @@ async function capture() {
   try{
     let capturedImage = null;
     let pngBuffer = null;
-    const activeDisplay = getActiveDisplay();
-    if(process.platform === 'linux') {
+    const activeDisplay = getCaptureDisplay();
+    if(process.platform === 'win32') {
+      const tempRaw = path.join(require('node:os').tmpdir(), 'clipboardline-shot-' + Date.now() + '-' + process.pid + '.bgra');
+      try {
+        const physRect = typeof screen.dipToScreenRect === 'function'
+          ? screen.dipToScreenRect(null, activeDisplay.bounds)
+          : {
+              x: Math.round(activeDisplay.bounds.x * activeDisplay.scaleFactor),
+              y: Math.round(activeDisplay.bounds.y * activeDisplay.scaleFactor),
+              width: Math.round(activeDisplay.bounds.width * activeDisplay.scaleFactor),
+              height: Math.round(activeDisplay.bounds.height * activeDisplay.scaleFactor)
+            };
+        const res = await native.captureScreen(physRect, tempRaw);
+        if (res && res.ok && fs.existsSync(tempRaw)) {
+          const rawBuf = await fs.promises.readFile(tempRaw);
+          try { await fs.promises.unlink(tempRaw); } catch {}
+          if (rawBuf.length === res.width * res.height * 4) {
+            const img = nativeImage.createFromBitmap(rawBuf, { width: res.width, height: res.height });
+            if (!img.isEmpty()) capturedImage = img;
+          }
+        }
+      } catch {} finally {
+        try { if (fs.existsSync(tempRaw)) await fs.promises.unlink(tempRaw); } catch {}
+      }
+    } else if(process.platform === 'linux') {
       const tempShot = path.join(require('node:os').tmpdir(), 'clipboardline-shot-' + Date.now() + '.png');
       try {
         if (fs.existsSync('/usr/bin/spectacle')) {
@@ -538,8 +577,14 @@ async function capture() {
     if(!capturedImage || capturedImage.isEmpty()) {
       try {
         const display=activeDisplay;
+        const displays=screen.getAllDisplays();
+        const displayIndex=displays.findIndex(d=>d.id===display.id);
         const sources=await desktopCapturer.getSources({types:['screen'],thumbnailSize:{width:Math.round(display.size.width*display.scaleFactor),height:Math.round(display.size.height*display.scaleFactor)}});
-        const source=sources.find(s=>s.display_id===String(display.id))||sources[0];
+        const source=
+          sources.find(s=>s.display_id&&s.display_id===String(display.id))||
+          (displayIndex>=0?sources.find(s=>s.id==='screen:'+displayIndex+':0'):null)||
+          (displayIndex>=0?sources[displayIndex]:null)||
+          sources[0];
         if(source && !source.thumbnail.isEmpty()) {
           capturedImage = source.thumbnail;
         }
@@ -554,8 +599,8 @@ async function capture() {
     const size=capturedImage.getSize();
     const id=crypto.randomUUID();
     const previewJpeg=capturedImage.toJPEG(92);
-    pendingCapture={id,image:capturedImage,buffer:pngBuffer,previewJpeg,dataUrl:'appmedia://media/pending/'+id,width:size.width,height:size.height,createdAt:Date.now()};
-    await show('capture',{captureId:id});
+    pendingCapture={id,image:capturedImage,buffer:pngBuffer,previewJpeg,dataUrl:'appmedia://media/pending/'+id,width:size.width,height:size.height,displayId:activeDisplay.id,createdAt:Date.now()};
+    await show('capture',{captureId:id,displayId:activeDisplay.id});
     return{captureId:id};
   }catch(error){if(wasVisible)await show(view);throw error;}
 }
@@ -945,7 +990,13 @@ else app.whenReady().then(async()=>{
   window.webContents.on('render-process-gone',()=>finishShortcutRecording());
   window.webContents.on('did-start-navigation',()=>finishShortcutRecording());
   await window.loadURL(entry);
-  monitor=native.monitor(event=>{if(!testMode)void enqueueClipboard(event);},error=>{monitor?.kill();monitor=null;pasteTargets.clear();if(!closing)notify(error.message+' Falling back to bounded clipboard polling.');},focus=>pasteTargets.observe(focus));
+  monitor=native.monitor(
+    event=>{if(!testMode)void enqueueClipboard(event);},
+    error=>{monitor?.kill();monitor=null;pasteTargets.clear();if(!closing)notify(error.message+' Falling back to bounded clipboard polling.');},
+    focus=>pasteTargets.observe(focus),
+    ()=>{},
+    point=>{try{const dip=typeof screen.screenToDipPoint==='function'?screen.screenToDipPoint(point):point;const d=getActiveDisplay(dip);if(d)lastClickDisplayId=d.id;}catch{}}
+  );
   if(!testMode||testTray){
     if(process.platform==='win32')app.setAppUserModelId('com.clipboardline.desktop.windows');
     createTray();
