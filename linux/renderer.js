@@ -306,8 +306,7 @@ function windowControls(){return `<div class="window-controls">${iconButton('win
 async function setLibraryLayout(patch){Object.assign(ui,patch);render();const names={list:'libraryListMode',inspectorVisible:'libraryInspectorVisible',sidebarVisible:'librarySidebarVisible',sidebarWidth:'librarySidebarWidth',inspectorWidth:'libraryInspectorWidth',listColumns:'libraryListColumns'};return command('setSettings',{patch:Object.fromEntries(Object.entries(patch).filter(([key])=>names[key]).map(([key,value])=>[names[key],value]))});}
 function libraryTitle(){return ui.scope==='folder'?folderPath(ui.folder):ui.scope==='tag'?'# '+ui.tag:t({saved:'My library',recent:'Recent copies',pinned:'Pinned',unorganized:'Unorganized',trash:'Trash'}[ui.scope]||'Library');}
 function topbar(){
- if(ui.view==='shelves')return '';
- if(ui.view==='capture')return `<header class="topbar capture-topbar"><span class="window-title">ClipBoardLine — ${esc(t('Screenshot'))}</span><div class="grow"></div>${windowControls()}</header>`;
+ if(ui.view==='shelves'||ui.view==='capture')return '';
  if(ui.view==='settings')return `<header class="topbar"><span class="window-title">ClipBoardLine — ${esc(t('Settings'))}</span><div class="grow"></div>${iconButton('actions','actions','Actions')}${windowControls()}</header>`;
  return `<header class="topbar library-toolbar">${iconButton('toggle-sidebar','sidebar','Toggle sidebar','aria-pressed="'+ui.sidebarVisible+'"')}<div class="window-title"><strong>${esc(libraryTitle())}</strong><small>${libraryItems().length} ${esc(t('items'))}</small></div><div class="toolbar library-main-tools">${iconButton('new-note','note','New note')}${iconButton('pin','pin','Pin')}${iconButton('view-mode',ui.list?'library':'list',ui.list?'Grid':'List')}${iconButton('toggle-filters','filter','Filters','aria-pressed="'+ui.filtersOpen+'"')}${iconButton('actions','actions','Actions')}</div><div class="grow"></div><label class="library-search">${icon('search')}<input id="search-input" data-focus="library-search" value="${attr(ui.search)}" placeholder="${attr(t('Search library…'))}" aria-label="${attr(t('Search Library'))}"></label>${iconButton('toggle-inspector','details','Show details','aria-pressed="'+ui.inspectorVisible+'"')}${windowControls()}</header>`;
 }
@@ -596,6 +595,11 @@ function drawCaptureCanvas(){
    c.fillStyle='#ffffff';c.fillRect(x-size/2,y-size/2,size,size);
    c.strokeStyle='#087ce8';c.strokeRect(x-size/2,y-size/2,size,size);
   }
+  c.restore();
+ }else{
+  c.save();
+  c.fillStyle='rgba(0, 0, 0, 0.22)';
+  c.fillRect(0,0,width,height);
   c.restore();
  }
  drawSelectionOutline(c,session.doc,width);
