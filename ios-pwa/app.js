@@ -296,43 +296,57 @@
     return new Promise(res => c.toBlob(b => res(b || blob), 'image/png'));
   }
 
-  // --- Sandboxed Origin:null Google Lens Upload (HTTP 303 direct results!) ---
-  async function launchGoogleLens(blob) {
-    // Open popup synchronously inside user tap gesture so iOS Safari never blocks it!
-    const popup = window.open('/clip/lens-bridge.html', '_blank');
+  function normalizeBase64(raw) {
+    let s = raw || '';
+    try { s = decodeURIComponent(s); } catch {}
+    // iOS Shortcuts sometimes leaves spaces/newlines or URL-safe base64 chars
+    s = s.replace(/[\r\n\t]+/g, '').replace(/ /g, '+').replace(/-/g, '+').replace(/_/g, '/');
+    const rem = s.length % 4;
+    if (rem) s += '='.repeat(4 - rem);
+    return s;
+  }
+
+  function decodeBase64ToBlob(raw) {
+    const clean = normalizeBase64(raw);
+    if (clean.length < 32) return null;
+    const bin = atob(clean);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const isPng = bytes[0] === 0x89 && bytes[1] === 0x50;
+    return new Blob([bytes], { type: isPng ? 'image/png' : 'image/jpeg' });
+  }
+
+  // --- Sandboxed Origin:null Google Lens Upload (100% synchronous hash handoff — works in iOS Safari & Standalone PWA!) ---
+  function openLensBridgeWithCanvas(srcCanvas) {
+    const sw = srcCanvas.width || 1, sh = srcCanvas.height || 1;
+    const scale = Math.min(1, 960 / Math.max(sw, sh));
+    const w = Math.max(1, Math.round(sw * scale));
+    const h = Math.max(1, Math.round(sh * scale));
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    c.getContext('2d').drawImage(srcCanvas, 0, 0, w, h);
+    const dataUrl = c.toDataURL('image/jpeg', 0.74);
+    const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+    const url = `/clip/lens-bridge.html#dims=${w},${h}&b64=${encodeURIComponent(b64)}`;
+    const popup = window.open(url, '_blank');
+    if (!popup) location.href = url;
+  }
+
+  async function launchGoogleLens(blob, existingImgEl = null) {
+    if (existingImgEl && existingImgEl.complete && existingImgEl.naturalWidth) {
+      const c = document.createElement('canvas');
+      c.width = existingImgEl.naturalWidth; c.height = existingImgEl.naturalHeight;
+      c.getContext('2d').drawImage(existingImgEl, 0, 0);
+      openLensBridgeWithCanvas(c);
+      return;
+    }
     try {
       const img = await blobToImage(blob);
-      const scale = Math.min(1, 1600 / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
-      const w = Math.max(1, Math.round(img.naturalWidth * scale));
-      const h = Math.max(1, Math.round(img.naturalHeight * scale));
       const c = document.createElement('canvas');
-      c.width = w; c.height = h;
-      c.getContext('2d').drawImage(img, 0, 0, w, h);
-      const jpgBlob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.88));
-      const buf = await jpgBlob.arrayBuffer();
-
-      if (!popup) {
-        toast('Pop-up engellendi — Safari ayarlarından izin ver veya Paylaş kullan');
-        return;
-      }
-
-      let sent = false;
-      const sendNow = () => {
-        if (sent) return;
-        sent = true;
-        try { popup.postMessage({ type: 'LENS_IMAGE', bytes: buf, dims: `${w},${h}` }, '*'); } catch {}
-      };
-      const onMsg = e => {
-        if (e.data && e.data.type === 'LENS_READY') {
-          window.removeEventListener('message', onMsg);
-          sendNow();
-        }
-      };
-      window.addEventListener('message', onMsg);
-      setTimeout(() => { window.removeEventListener('message', onMsg); sendNow(); }, 700);
-      setTimeout(() => { try { popup.postMessage({ type: 'LENS_IMAGE', bytes: buf, dims: `${w},${h}` }, '*'); } catch {} }, 1300);
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      openLensBridgeWithCanvas(c);
     } catch {
-      if (popup) popup.close();
       toast('Google Lens gönderimi başarısız oldu');
     }
   }
@@ -649,7 +663,11 @@
         else if (act === 'trash') { item.trashedAt = Date.now(); await dbPut(item); render(); close(); toast('Çöpe taşındı'); }
         else if (act === 'restore') { item.trashedAt = null; await dbPut(item); render(); close(); toast('Geri yüklendi'); }
         else if (act === 'delete-forever') { await dbDelete(item.id); state.items = state.items.filter(i => i.id !== item.id); render(); close(); toast('Kalıcı silindi'); }
-        else if (act === 'lens' && item.blob) { close(); await launchGoogleLens(item.blob); }
+        else if (act === 'lens' && item.blob) {
+          const previewImg = $modal.querySelector('.sheet-preview-img');
+          close();
+          void launchGoogleLens(item.blob, previewImg);
+        }
         else if (act === 'edit' && item.blob) { close(); openEditorWithBlob(item.blob); }
         else if (act === 'copy-ocr') { await navigator.clipboard.writeText(item.ocrText); toast('OCR metni kopyalandı'); }
         else if (act === 'ocr' && item.blob) {
@@ -795,10 +813,10 @@
         closeEditor();
         toast('İpe kaydedildi ve kopyalandı');
       } else if (a === 'lens') {
-        const out = await exportEditorBlob(ed);
-        await addImageBlob(out.blob, out.w, out.h);
+        const outCanvas = renderEditorCanvasSync(ed);
+        openLensBridgeWithCanvas(outCanvas);
+        outCanvas.toBlob(blob => { if (blob) void addImageBlob(blob, outCanvas.width, outCanvas.height); }, 'image/png');
         closeEditor();
-        await launchGoogleLens(out.blob);
       } else if (a === 'ocr') {
         const out = await exportEditorBlob(ed);
         const text = await runOcrOnBlob(out.blob);
@@ -1044,7 +1062,7 @@
     }
   }
 
-  async function exportEditorBlob(ed) {
+  function renderEditorCanvasSync(ed) {
     const iw = ed.img.naturalWidth, ih = ed.img.naturalHeight;
     const full = document.createElement('canvas');
     full.width = iw; full.height = ih;
@@ -1052,16 +1070,21 @@
     ctx.drawImage(ed.img, 0, 0, iw, ih);
     drawAnnotations(ctx, ed.anns, ed.img, 1, 0, 0, true);
 
-    let out = full, w = iw, h = ih;
     if (ed.crop && ed.crop.w >= 16 && ed.crop.h >= 16) {
       const rx = Math.max(0, Math.round(ed.crop.x)), ry = Math.max(0, Math.round(ed.crop.y));
-      w = Math.max(1, Math.min(iw - rx, Math.round(ed.crop.w)));
-      h = Math.max(1, Math.min(ih - ry, Math.round(ed.crop.h)));
-      out = document.createElement('canvas'); out.width = w; out.height = h;
+      const w = Math.max(1, Math.min(iw - rx, Math.round(ed.crop.w)));
+      const h = Math.max(1, Math.min(ih - ry, Math.round(ed.crop.h)));
+      const out = document.createElement('canvas'); out.width = w; out.height = h;
       out.getContext('2d').drawImage(full, rx, ry, w, h, 0, 0, w, h);
+      return out;
     }
+    return full;
+  }
+
+  async function exportEditorBlob(ed) {
+    const out = renderEditorCanvasSync(ed);
     const blob = await new Promise(res => out.toBlob(res, 'image/png'));
-    return { blob, w, h };
+    return { blob, w: out.width, h: out.height };
   }
 
   // --- Event Binding ---
@@ -1188,20 +1211,23 @@
 
   async function tryOpenFromUrlHash() {
     const hash = location.hash || '';
-    if (!hash.startsWith('#img=')) return false;
-    const rawB64 = decodeURIComponent(hash.slice(5)).replace(/\s+/g, '');
+    const qs = new URLSearchParams(location.search);
+    const directLens = hash.startsWith('#lens=') ? hash.slice(6) : qs.get('lens');
+    if (directLens && directLens.length >= 32) {
+      const clean = normalizeBase64(directLens);
+      location.replace('/clip/lens-bridge.html#b64=' + encodeURIComponent(clean));
+      return true;
+    }
+    const imgRaw = hash.startsWith('#img=') ? hash.slice(5) : qs.get('img');
+    if (!imgRaw) return false;
     history.replaceState(null, '', '/clip/');
-    if (rawB64.length < 32) return false;
     try {
-      const bin = atob(rawB64);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      const isPng = bytes[0] === 0x89 && bytes[1] === 0x50;
-      const blob = new Blob([bytes], { type: isPng ? 'image/png' : 'image/jpeg' });
+      const blob = decodeBase64ToBlob(imgRaw);
+      if (!blob) return false;
       await openEditorWithBlob(blob);
       return true;
     } catch {
-      toast('Kestirmeden gelen görsel okunamadı');
+      toast('Kestirmeden gelen görsel okunamadı (Base64 satır sonunu Yok seç)');
       return false;
     }
   }

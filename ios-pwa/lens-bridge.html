@@ -7,17 +7,19 @@
   <title>Google Lens — ClipBoardLine</title>
   <style>
     body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#14151c;color:#edf0fa;font:500 15px/1.5 -apple-system,BlinkMacSystemFont,system-ui,sans-serif}
-    .card{display:flex;flex-direction:column;align-items:center;gap:14px;padding:20px 26px;border-radius:16px;background:#1c1e28;border:1px solid rgba(255,255,255,.09);max-width:300px;text-align:center}
+    .card{display:flex;flex-direction:column;align-items:center;gap:14px;padding:22px 26px;border-radius:16px;background:#1c1e28;border:1px solid rgba(255,255,255,.09);max-width:310px;text-align:center}
     .spin{width:24px;height:24px;border:3px solid rgba(255,255,255,.18);border-top-color:#7c9cff;border-radius:50%;animation:s .7s linear infinite}
     .hint{font-size:12.5px;color:#97a0ba}
+    .btn{display:none;margin-top:4px;padding:10px 18px;border-radius:12px;border:0;background:#7c9cff;color:#0d101a;font-weight:700;font-size:14px;cursor:pointer}
     @keyframes s{to{transform:rotate(360deg)}}
   </style>
 </head>
 <body>
   <div class="card">
-    <div class="spin"></div>
-    <div id="msg">Google Lens'e gönderiliyor…</div>
-    <div class="hint" id="hint">Bir saniye içinde arama sonuçları açılacak.</div>
+    <div class="spin" id="spin"></div>
+    <div id="msg">Google Lens’e gönderiliyor…</div>
+    <div class="hint" id="hint">Bir saniye içinde görsel arama sonuçları açılacak.</div>
+    <button class="btn" id="manual-btn" type="button">Google Lens’te Ara</button>
   </div>
   <form id="f" method="POST" action="https://lens.google.com/v3/upload?hl=tr&ep=ccm&re=df" enctype="multipart/form-data" style="display:none">
     <input type="file" name="encoded_image" id="fi">
@@ -26,36 +28,67 @@
   <script>
     (function () {
       let submitted = false;
+      function normalizeB64(raw) {
+        let s = raw || '';
+        try { s = decodeURIComponent(s); } catch (e) {}
+        s = s.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+        const rem = s.length % 4;
+        if (rem) s += '='.repeat(4 - rem);
+        return s;
+      }
       function submitBytes(bytes, dims) {
         if (submitted) return;
         submitted = true;
         try {
-          const file = new File([new Uint8Array(bytes)], 'capture.jpg', { type: 'image/jpeg' });
+          const isPng = bytes[0] === 0x89 && bytes[1] === 0x50;
+          const file = new File([bytes], isPng ? 'capture.png' : 'capture.jpg', { type: isPng ? 'image/png' : 'image/jpeg' });
           const dt = new DataTransfer();
           dt.items.add(file);
           document.getElementById('fi').files = dt.files;
           document.getElementById('dims').value = dims || '';
           const f = document.getElementById('f');
           f.action = 'https://lens.google.com/v3/upload?hl=tr&stcs=' + Date.now() + '&ep=ccm&re=df';
+          const btn = document.getElementById('manual-btn');
+          btn.onclick = function () { f.submit(); };
           f.submit();
+          setTimeout(function () {
+            btn.style.display = 'inline-block';
+            document.getElementById('hint').textContent = 'Otomatik yönlenmezse butona dokun.';
+          }, 1800);
         } catch (err) {
           location.replace('https://lens.google.com/?hl=tr');
         }
       }
-      window.addEventListener('message', function (e) {
-        if (e.data && e.data.type === 'LENS_IMAGE' && e.data.bytes) {
-          submitBytes(e.data.bytes, e.data.dims);
+      function tryFromHash() {
+        const hash = (location.hash || '').replace(/^#/, '');
+        if (!hash) return false;
+        const params = new URLSearchParams(hash);
+        const b64 = params.get('b64') || params.get('img') || params.get('lens') || (hash.indexOf('=') === -1 ? hash : '');
+        const dims = params.get('dims') || '';
+        if (!b64 || b64.length < 32) return false;
+        try {
+          const clean = normalizeB64(b64);
+          const bin = atob(clean);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          submitBytes(bytes, dims);
+          return true;
+        } catch (err) {
+          document.getElementById('msg').textContent = 'Görsel çözümlenemedi';
+          document.getElementById('hint').textContent = String(err && err.message || err);
+          return false;
         }
-      });
-      if (window.opener) {
-        window.opener.postMessage({ type: 'LENS_READY' }, '*');
       }
-      setTimeout(function () {
-        if (!submitted) {
-          document.getElementById('msg').textContent = 'Görsel bekleniyor…';
-          document.getElementById('hint').textContent = 'Yönlendirilmezse pencereyi kapatıp tekrar deneyin.';
+      if (!tryFromHash()) {
+        window.addEventListener('message', function (e) {
+          if (e.data && e.data.type === 'LENS_IMAGE' && e.data.bytes) {
+            submitBytes(new Uint8Array(e.data.bytes), e.data.dims);
+          }
+        });
+        if (window.opener) {
+          try { window.opener.postMessage({ type: 'LENS_READY' }, '*'); } catch (e) {}
         }
-      }, 4000);
+      }
     })();
   </script>
 </body>
