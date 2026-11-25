@@ -263,10 +263,12 @@ public static class ClipBoardLineNative {
     lock(outputLock) { if(lastFocus==snapshot)return;lastFocus=snapshot;Console.Out.WriteLine("{\"focus\":"+snapshot+"}");Console.Out.Flush(); }
   }
   public static void ObserveFocus() {
-    focusHandler=delegate(object sender,AutomationFocusChangedEventArgs args) {
-      try { var value=DescribeFocus(sender as AutomationElement,true);EmitFocus(value==null?null:value.Json); } catch(Exception) {}
-    };
-    Automation.AddAutomationFocusChangedEventHandler(focusHandler);
+    try {
+      focusHandler=delegate(object sender,AutomationFocusChangedEventArgs args) {
+        try { var value=DescribeFocus(sender as AutomationElement,true);EmitFocus(value==null?null:value.Json); } catch(Exception) {}
+      };
+      Automation.AddAutomationFocusChangedEventHandler(focusHandler);
+    } catch(Exception) {}
   }
   public static void EmitCurrentFocus() { try { EmitFocus(FocusSnapshot()); } catch(Exception) {} }
   public static void EmitSequence(uint sequence) { lock(outputLock) { Console.Out.WriteLine("{\"sequence\":"+sequence+"}");Console.Out.Flush(); } }
