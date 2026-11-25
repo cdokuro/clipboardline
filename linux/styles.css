@@ -109,6 +109,83 @@
   --card-link-bg: rgba(22, 20, 32, 0.92);
   --pill-bg: rgba(19, 13, 22, 0.90);
 }
+.theme-edna {
+  color-scheme: dark;
+  --bg: #16161e;
+  --surface: #1f2335f2;
+  --raised: #24283b;
+  --line: #292e42;
+  --text: #c0caf5;
+  --muted: #787c99;
+  --accent: #7aa2f7;
+  --image: #7aa2f7;
+  --text-color: #e0af68;
+  --link: #73daca;
+  --danger: #f7768e;
+  --scrim-bg: radial-gradient(ellipse at 50% 25%, rgba(22, 22, 30, 0.84) 0%, rgba(15, 16, 23, 0.94) 100%);
+  --neon-primary: #7aa2f7;
+  --neon-secondary: #73daca;
+  --neon-rope: rgba(122, 162, 247, 0.42);
+  --neon-rope-active: #7aa2f7;
+  --neon-pin: #7aa2f7;
+  --neon-border: #2f354c;
+  --neon-border-strong: #7aa2f7;
+  --neon-glow: rgba(0, 0, 0, 0);
+  --neon-glow-strong: rgba(122, 162, 247, 0.22);
+  --card-bg: #1f2335;
+  --card-text-bg: #1e2234;
+  --card-link-bg: #1c2433;
+  --pill-bg: rgba(31, 35, 53, 0.94);
+}
+.theme-edna button {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
+  border-color: #2f354c;
+  background: #24283b;
+}
+.theme-edna button:hover:not(:disabled) {
+  border-color: #7aa2f7;
+  background: #292e42;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.36);
+}
+.theme-edna button.primary {
+  background: #7aa2f7;
+  border-color: #7aa2f7;
+  color: #16161e;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(122, 162, 247, 0.28);
+}
+.theme-edna button.primary:hover:not(:disabled) {
+  background: #89b4fa;
+  border-color: #89b4fa;
+}
+.theme-edna .ui-icon {
+  stroke-width: 1.8;
+}
+.theme-edna .sidebar button.active,
+.theme-edna .settings-tabs button.active {
+  background: rgba(122, 162, 247, 0.16);
+  border-color: rgba(122, 162, 247, 0.55);
+  color: #c0caf5;
+  box-shadow: inset 3px 0 0 #7aa2f7;
+}
+.theme-edna .card {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.38);
+  border-color: #292e42;
+}
+.theme-edna .card.focused,
+.theme-edna .card.selected {
+  border-color: #7aa2f7;
+  box-shadow: 0 0 0 2px rgba(122, 162, 247, 0.32), 0 12px 28px rgba(0, 0, 0, 0.45);
+}
+.theme-edna .shelf-title.kind-image .ui-icon { color: #7aa2f7; }
+.theme-edna .shelf-title.kind-text .ui-icon { color: #e0af68; }
+.theme-edna .shelf-title.kind-link .ui-icon { color: #73daca; }
+.theme-edna .capture-topbar-tools,
+.theme-edna .capture-toolbar {
+  background: rgba(26, 27, 38, 0.94);
+  border-color: #3b4261;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
 /* Translated pixels must not accept pointer hits at their old layout position.
    Keyboard handlers remain active; this switches only at transition boundaries. */
 body[data-shelf-motion="opening"],body[data-shelf-motion="opening"] *,body[data-shelf-motion="closing"],body[data-shelf-motion="closing"] * { pointer-events: none !important; }
@@ -721,30 +798,44 @@ body.view-capture, body.view-capture #app, .capture-shell {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+.capture-topbar-tools,
 .capture-toolbar {
   position: absolute;
   z-index: 12;
-  bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 5px;
-  max-width: calc(100% - 24px);
+  max-width: calc(100vw - 24px);
   overflow-x: auto;
-  padding: 7px 12px;
+  scrollbar-width: none;
+  padding: 6px 12px;
   border: 1px solid var(--neon-border);
   border-radius: 14px;
   background: var(--pill-bg);
   backdrop-filter: blur(24px);
   box-shadow: 0 0 18px var(--neon-glow), 0 14px 38px #0009;
 }
+.capture-topbar-tools {
+  top: 14px;
+}
+.capture-toolbar {
+  bottom: 16px;
+}
+.capture-topbar-tools::-webkit-scrollbar,
+.capture-toolbar::-webkit-scrollbar {
+  display: none;
+}
+.capture-topbar-tools .divider,
 .capture-toolbar .divider {
   width: 1px;
   height: 22px;
   margin: 0 4px;
   background: #ffffff22;
+  flex-shrink: 0;
 }
+.capture-topbar-tools input[type="color"],
 .capture-toolbar input[type="color"] {
   width: 30px;
   height: 28px;
@@ -753,23 +844,48 @@ body.view-capture, body.view-capture #app, .capture-shell {
   background: transparent;
   cursor: pointer;
 }
+.capture-topbar-tools button,
 .capture-toolbar button {
   min-height: 32px;
-  padding: 5px 11px;
+  padding: 5px 10px;
   border-radius: 9px;
   font-weight: 500;
 }
+.capture-topbar-tools button.icon-button,
 .capture-toolbar button.icon-button {
   width: 32px;
   min-width: 32px;
   padding: 5px;
 }
+.capture-topbar-tools > *,
 .capture-toolbar > * { flex-shrink: 0; }
+.capture-topbar-tools select,
 .capture-toolbar select { width: auto; max-width: 96px; height: 28px; padding: 2px 4px; font-size: 11px; }
+.capture-topbar-tools .check-label,
 .capture-toolbar .check-label { font-size: 11px; }
-.capture-toolbar input[type="range"] { width: 80px; }
-.capture-toolbar input[type="number"] { width: 54px; height: 28px; padding: 2px 4px; }
+.capture-topbar-tools input[type="range"],
+.capture-toolbar input[type="range"] { width: 72px; }
+.capture-topbar-tools input[type="number"],
+.capture-toolbar input[type="number"] { width: 52px; height: 28px; padding: 2px 4px; }
+.capture-topbar-tools :disabled,
 .capture-toolbar :disabled { opacity: .45; }
+.capture-lens-btn {
+  border-color: color-mix(in srgb, #4285f4 65%, var(--neon-border));
+  background: color-mix(in srgb, #4285f4 16%, var(--pill-bg));
+  color: var(--text);
+}
+.capture-lens-btn:hover:not(:disabled) {
+  border-color: #60a5fa;
+  background: color-mix(in srgb, #4285f4 28%, var(--pill-bg));
+}
+.update-badge {
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #73daca;
+  border-color: rgba(115, 218, 202, 0.55);
+  background: rgba(115, 218, 202, 0.14);
+}
 
 /* ==========================================================================
    Mini Pano (Alt+Meta+V) — Compact Summary Clipboard History Popup
