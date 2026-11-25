@@ -542,9 +542,11 @@ function initCaptureSession(pending){
  const image=new Image();
  image.crossOrigin='anonymous';
  // doc holds annotations, crop, selection and undo/redo; crop gestures stay in this adapter.
- const session={id:pending.id,dataUrl:pending.dataUrl,width:pending.width||window.innerWidth||1920,height:pending.height||window.innerHeight||1080,base:image,tool:'crop',doc:annotationEngine.createDocument(),style:{...annotationEngine.DEFAULT_STYLE},zoom:1,pan:{x:0,y:0},busy:false};
+ const session={id:pending.id,dataUrl:pending.dataUrl,width:pending.width||window.innerWidth||1920,height:pending.height||window.innerHeight||1080,base:image,tool:'crop',doc:annotationEngine.createDocument(),style:{...annotationEngine.DEFAULT_STYLE},zoom:1,pan:{x:0,y:0},busy:false,signaledReady:false};
  ui.captureSession=session;
- image.onload=()=>{if(ui.captureSession===session){session.width=image.naturalWidth||session.width;session.height=image.naturalHeight||session.height;drawCaptureCanvas();}};
+ const signalReady=()=>{if(session.signaledReady||ui.captureSession!==session)return;session.signaledReady=true;setTimeout(()=>{if(ui.captureSession===session&&api?.captureReady)api.captureReady(session.id);},16);};
+ image.onload=()=>{if(ui.captureSession===session){session.width=image.naturalWidth||session.width;session.height=image.naturalHeight||session.height;drawCaptureCanvas();signalReady();}};
+ image.onerror=()=>{signalReady();};
  image.src=pending.dataUrl;
 }
 function updateCaptureTransform(){
