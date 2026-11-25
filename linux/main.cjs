@@ -230,10 +230,13 @@ async function show(next='shelves',event=null) {
     // Complete that operation before a rapid reopen captures and takes focus.
     if(hidePromise)await hidePromise;
     if(generation!==visibilityGeneration)return;
-    if(!window.isVisible() || !window.isFocused()) {
-      const target=await native.capture().catch(()=>null);
-      if(generation!==visibilityGeneration)return;
-      previous=pasteTargets.capture(target);
+    if(next!=='capture'&&next!=='library'&&next!=='settings'&&(!window.isVisible() || !window.isFocused())) {
+      const observed=pasteTargets.reenter();
+      if(observed){
+        previous=observed;
+      }else{
+        void native.capture().then(target=>{if(generation===visibilityGeneration&&desiredVisible)previous=pasteTargets.capture(target);}).catch(()=>{});
+      }
     }
     if(next!=='capture')pendingCapture=null;
     rememberNormalBounds();view=next;message='';
@@ -498,10 +501,17 @@ async function importFile(file) {
   const image=nativeImage.createFromPath(file);if(image.isEmpty())throw new Error('Unsupported image file');const item=store.insert('image',image.toPNG());queueOCR(item.id);refreshImageSearch();return item;
 }
 async function capture() {
-  const wasVisible=window.isVisible();visibilityGeneration++;desiredVisible=false;shelfMotion.cancel();if(wasVisible)window.hide();viewEvent=null;broadcast({surfaceOnly:true});await shelfMotion.request('reset');
+  const wasVisible=window.isVisible();
+  visibilityGeneration++;desiredVisible=false;shelfMotion.cancel();viewEvent=null;
+  if(wasVisible){
+    window.hide();
+    broadcast({surfaceOnly:true});
+    await shelfMotion.request('reset');
+    // Wait briefly only when our own window actually had to leave the compositor.
+    await new Promise(resolve=>setTimeout(resolve,60));
+  }
   try{
-    // Capture only after the shelf window has left the compositor.
-    await new Promise(resolve=>setTimeout(resolve,150));
+    let capturedImage = null;
     let pngBuffer = null;
     const activeDisplay = getActiveDisplay();
     if(process.platform === 'linux') {
@@ -520,32 +530,79 @@ async function capture() {
         if (fs.existsSync(tempShot)) {
           pngBuffer = await fs.promises.readFile(tempShot);
           try { await fs.promises.unlink(tempShot); } catch {}
+          capturedImage = nativeImage.createFromBuffer(pngBuffer);
         }
       } catch {}
     }
 
-    if(!pngBuffer) {
+    if(!capturedImage || capturedImage.isEmpty()) {
       try {
-        const display=getActiveDisplay();
+        const display=activeDisplay;
         const sources=await desktopCapturer.getSources({types:['screen'],thumbnailSize:{width:Math.round(display.size.width*display.scaleFactor),height:Math.round(display.size.height*display.scaleFactor)}});
         const source=sources.find(s=>s.display_id===String(display.id))||sources[0];
         if(source && !source.thumbnail.isEmpty()) {
-          pngBuffer = source.thumbnail.toPNG();
+          capturedImage = source.thumbnail;
         }
       } catch {}
     }
 
-    if(!pngBuffer) throw new Error('Screen capture is unavailable');
+    if(!capturedImage || capturedImage.isEmpty()) throw new Error('Screen capture is unavailable');
     if(testMode){
-      const item=store.insert('image',pngBuffer);queueOCR(item.id);refreshImageSearch();await show('shelves',{selectId:item.id,kind:'image',preview:true,crop:true});return{id:item.id};
+      const buf=pngBuffer||capturedImage.toPNG();
+      const item=store.insert('image',buf);queueOCR(item.id);refreshImageSearch();await show('shelves',{selectId:item.id,kind:'image',preview:true,crop:true});return{id:item.id};
     }
-    const captured=nativeImage.createFromBuffer(pngBuffer);
-    if(captured.isEmpty())throw new Error('Screen capture is unavailable');
-    const size=captured.getSize();
-    pendingCapture={id:crypto.randomUUID(),buffer:pngBuffer,dataUrl:'data:image/png;base64,'+pngBuffer.toString('base64'),width:size.width,height:size.height,createdAt:Date.now()};
-    await show('capture',{captureId:pendingCapture.id});
-    return{captureId:pendingCapture.id};
+    const size=capturedImage.getSize();
+    const id=crypto.randomUUID();
+    const previewJpeg=capturedImage.toJPEG(92);
+    pendingCapture={id,image:capturedImage,buffer:pngBuffer,previewJpeg,dataUrl:'appmedia://media/pending/'+id,width:size.width,height:size.height,createdAt:Date.now()};
+    await show('capture',{captureId:id});
+    return{captureId:id};
   }catch(error){if(wasVisible)await show(view);throw error;}
+}
+function uploadToGoogleLens(imageObj, lang='tr') {
+  const https = require('node:https');
+  const size = imageObj.getSize();
+  const scale = Math.min(1, 1600 / Math.max(size.width || 1, size.height || 1));
+  const resized = scale < 1
+    ? imageObj.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)), quality: 'good' })
+    : imageObj;
+  const jpegBuf = resized.toJPEG(88);
+  const boundary = '----ClipBoardLineLens' + crypto.randomBytes(8).toString('hex');
+  const head = Buffer.from(
+    `--${boundary}\r\n` +
+    'Content-Disposition: form-data; name="encoded_image"; filename="capture.jpg"\r\n' +
+    'Content-Type: image/jpeg\r\n\r\n',
+    'utf8'
+  );
+  const tail = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
+  const body = Buffer.concat([head, jpegBuf, tail]);
+  const hl = lang === 'tr' ? 'tr' : 'en';
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      `https://lens.google.com/v3/upload?hl=${hl}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': body.length,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        },
+        timeout: 12000,
+      },
+      res => {
+        const loc = res.headers?.location;
+        res.resume();
+        if (loc && /^https:\/\//i.test(loc)) {
+          resolve(loc);
+        } else {
+          reject(new Error(`Google Lens HTTP ${res.statusCode}`));
+        }
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error('Google Lens timeout')));
+    req.on('error', reject);
+    req.end(body);
+  });
 }
 const INDEX_LANGUAGES=['eng','tur'];
 async function ocr(id,quiet=false,languages=INDEX_LANGUAGES){const key=id+':'+languages.join('+');if(ocrJobs.has(key))return ocrJobs.get(key);const promise=recognize(id,quiet,languages);ocrJobs.set(key,promise);try{return await promise;}finally{ocrJobs.delete(key);}}
@@ -658,14 +715,15 @@ async function command(action,payload={}) {
   }
   else if(action==='capture')result=await capture();
   else if(action==='commitCapture'){
-    let finalBuffer=null;const screenshot=pendingCapture?.buffer||null;
+    let finalBuffer=null;const captureRef=pendingCapture;
+    const screenshot=captureRef?.buffer||(captureRef?.image?captureRef.image.toPNG():null);
     if(typeof payload.dataUrl==='string'&&payload.dataUrl.startsWith('data:image/png;base64,')){
       if(payload.dataUrl.length>90_000_000)throw new Error('Invalid captured image');
       const decoded=nativeImage.createFromDataURL(payload.dataUrl);
       if(decoded.isEmpty()||decoded.getSize().width*decoded.getSize().height>80_000_000)throw new Error('Invalid captured image');
       finalBuffer=decoded.toPNG();
-    }else if(pendingCapture?.buffer){
-      finalBuffer=pendingCapture.buffer;
+    }else if(screenshot){
+      finalBuffer=screenshot;
     }else throw new Error('No active screen capture.');
     pendingCapture=null;
     // copy:false = an output action (Save, Print, …) runs on the stored item next; no clipboard, beep or copied mark.
@@ -698,28 +756,35 @@ async function command(action,payload={}) {
     result={id:item?.id??null};
   }
   else if(action==='googleLens'){
-    let pngBuffer=null;
+    let imgObj=null;
     if(typeof payload.dataUrl==='string'&&payload.dataUrl.startsWith('data:image/png;base64,')){
       if(payload.dataUrl.length>90_000_000)throw new Error('Invalid image');
-      const decoded=nativeImage.createFromDataURL(payload.dataUrl);
-      if(decoded.isEmpty())throw new Error('Invalid image');
-      pngBuffer=decoded.toPNG();
+      imgObj=nativeImage.createFromDataURL(payload.dataUrl);
+      if(imgObj.isEmpty())throw new Error('Invalid image');
     }else if(payload.id){
       const item=store.item(payload.id);
       if(item.kind!=='image')throw new Error('Select an image first.');
-      const img=nativeImage.createFromPath(store.posterPath(item.id));
-      if(img.isEmpty())throw new Error('Image unavailable');
-      pngBuffer=img.toPNG();
+      imgObj=nativeImage.createFromPath(store.posterPath(item.id));
+      if(imgObj.isEmpty())throw new Error('Image unavailable');
+    }else if(pendingCapture?.image){
+      imgObj=pendingCapture.image;
     }else if(pendingCapture?.buffer){
-      pngBuffer=pendingCapture.buffer;
+      imgObj=nativeImage.createFromBuffer(pendingCapture.buffer);
     }else throw new Error('Select an image first.');
     pendingCapture=null;
-    await writeImageClipboard(pngBuffer);
     await hide(false);
-    await shell.openExternal('https://lens.google.com/');
+    const pngBuffer=imgObj.toPNG();
+    void writeImageClipboard(pngBuffer).catch(()=>{});
     const isTr=outputLanguage()==='tr';
-    announce(isTr?'Görsel panoya kopyalandı — Google Lens sayfasında Ctrl+V ile hemen aratabilirsin.':'Image copied — press Ctrl+V on Google Lens to search.');
-    result={opened:true};
+    try{
+      const resultUrl=await uploadToGoogleLens(imgObj,isTr?'tr':'en');
+      await shell.openExternal(resultUrl);
+      result={opened:true,direct:true};
+    }catch{
+      await shell.openExternal('https://lens.google.com/');
+      announce(isTr?'Görsel panoya kopyalandı — Google Lens sayfasında Ctrl+V ile aratabilirsin.':'Image copied — press Ctrl+V on Google Lens to search.');
+      result={opened:true,direct:false};
+    }
   }
   else if(action==='openUpdateRelease'){
     const url=githubUpdates?.state?.releaseUrl||'https://github.com/cdokuro/clipboardline/tree/feat/linux-support';
@@ -846,7 +911,12 @@ else app.whenReady().then(async()=>{
       // origin checks here also reject remote-site media reads.
       const corsOrigin=mediaOrigin({method:request.method,origin:request.headers.get('Origin'),initiator:request.initiatorOrigin});
       if(!corsOrigin)return new WebResponse('Not found',{status:404});
-      const url=new URL(request.url);const match=/^\/([0-9a-f-]{36})(\/original|\/thumbnail|\/video(?:\/original)?)?$/.exec(url.pathname);
+      const url=new URL(request.url);
+      const pendingMatch=/^\/pending\/([0-9a-f-]{36})$/.exec(url.pathname);
+      if(url.hostname==='media'&&pendingMatch&&pendingCapture&&pendingCapture.id===pendingMatch[1]&&pendingCapture.previewJpeg){
+        return new WebResponse(pendingCapture.previewJpeg,{status:200,headers:{'Content-Type':'image/jpeg','Access-Control-Allow-Origin':corsOrigin,'Cache-Control':'no-store'}});
+      }
+      const match=/^\/([0-9a-f-]{36})(\/original|\/thumbnail|\/video(?:\/original)?)?$/.exec(url.pathname);
       if(url.hostname!=='media'||!match||url.hash)return new WebResponse('Not found',{status:404});
       let file,mime='image/png';
       if(match[2]==='/thumbnail'){const item=store.item(match[1]);if(!/^[a-f0-9]{64}\.png$/.test(item.thumbnailFile||''))return new WebResponse('Not found',{status:404});file=path.join(store.mediaDirectory,item.thumbnailFile);if(fs.lstatSync(file).isSymbolicLink())return new WebResponse('Not found',{status:404});}
