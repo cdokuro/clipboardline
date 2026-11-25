@@ -81,7 +81,7 @@ function settings(patch, previous = DEFAULTS) {
       const [low,high]=key==='librarySidebarWidth'?[180,320]:[270,400];
       if(!Number.isInteger(value)||value<low||value>high)fail('Invalid library panel width');out[key]=value;
     } else if (['theme','cardSize','language'].includes(key)) {
-      const values={theme:['soft','neutral','catppuccin','rosepine'],cardSize:['small','medium','large'],language:['system','en','tr','es','fr','pt-BR','az','zh-Hans','ja','ko']};
+      const values={theme:['soft','neutral','catppuccin','rosepine','edna'],cardSize:['small','medium','large'],language:['system','en','tr','es','fr','pt-BR','az','zh-Hans','ja','ko']};
       if(!values[key].includes(value))fail('Invalid appearance preference');out[key]=value;
     } else if(key==='output') {
       const bad=()=>fail('Invalid output preference');if(!value||typeof value!=='object'||Array.isArray(value))bad();
