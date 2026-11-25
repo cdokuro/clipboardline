@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="instant_snip"
+        android:enabled="true"
+        android:icon="@drawable/ic_tile_snip"
+        android:shortcutShortLabel="@string/tile_snip_label"
+        android:shortcutLongLabel="@string/tile_snip_label">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.clipboardline.android"
+            android:targetClass="com.clipboardline.android.service.InstantCaptureTrampoline" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="instant_shelf"
+        android:enabled="true"
+        android:icon="@drawable/ic_tile_shelf"
+        android:shortcutShortLabel="@string/tile_shelf_label"
+        android:shortcutLongLabel="@string/tile_shelf_label">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.clipboardline.android"
+            android:targetClass="com.clipboardline.android.service.InstantShelfTrampoline" />
+    </shortcut>
+</shortcuts>

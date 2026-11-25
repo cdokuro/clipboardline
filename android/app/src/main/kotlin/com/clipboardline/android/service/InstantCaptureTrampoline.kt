@@ -7,6 +7,7 @@ class InstantCaptureTrampoline : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         finish()
-        ClipAccessibilityService.requestInstantCapture(applicationContext, delayMs = 240L)
+        // Wait 340ms so notification shade / Quick Panel finishes collapsing before snapping
+        ClipAccessibilityService.requestInstantCapture(applicationContext, delayMs = 340L)
     }
 }

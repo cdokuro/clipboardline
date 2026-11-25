@@ -79,14 +79,24 @@ fun HangingClipCard(
     onTap: () -> Unit,
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
-    cardWidth: Dp = 152.dp,
-    cardHeight: Dp = 158.dp,
+    cardWidth: Dp? = null,
+    cardHeight: Dp? = null,
     showClothespin: Boolean = true
 ) {
     val palette = LocalClipPalette.current
+    val resolvedWidth = cardWidth ?: when (item.kind) {
+        ClipKind.IMAGE -> 86.dp
+        ClipKind.TEXT -> 122.dp
+        ClipKind.LINK -> 130.dp
+    }
+    val resolvedHeight = cardHeight ?: when (item.kind) {
+        ClipKind.IMAGE -> 86.dp
+        ClipKind.TEXT -> 108.dp
+        ClipKind.LINK -> 104.dp
+    }
     val tilt = if (showClothespin) {
         val seed = (abs(item.id.hashCode()) + index * 7) % 5 - 2
-        seed * 0.65f
+        seed * 0.55f
     } else 0f
 
     val accent = when (item.kind) {
@@ -97,24 +107,24 @@ fun HangingClipCard(
 
     Box(
         modifier = modifier
-            .width(cardWidth)
-            .padding(top = if (showClothespin) 10.dp else 0.dp)
+            .width(resolvedWidth)
+            .padding(top = if (showClothespin) 7.dp else 0.dp)
             .rotate(tilt),
         contentAlignment = Alignment.TopCenter
     ) {
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(cardHeight)
-                .clip(RoundedCornerShape(14.dp))
+                .height(resolvedHeight)
+                .clip(RoundedCornerShape(12.dp))
                 .combinedClickable(onClick = onTap, onLongClick = onLongPress),
-            shape = RoundedCornerShape(14.dp),
+            shape = RoundedCornerShape(12.dp),
             color = palette.surface,
             border = BorderStroke(
                 width = if (item.pinned) 1.3.dp else 1.dp,
                 color = if (item.pinned) palette.pinGold.copy(alpha = 0.65f) else palette.border
             ),
-            shadowElevation = 4.dp
+            shadowElevation = 3.dp
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 when (item.kind) {
@@ -137,45 +147,28 @@ fun HangingClipCard(
                                     Icons.Rounded.Image,
                                     contentDescription = null,
                                     tint = palette.textSecondary,
-                                    modifier = Modifier.align(Alignment.Center).size(30.dp)
+                                    modifier = Modifier.align(Alignment.Center).size(24.dp)
                                 )
                             }
                             if (item.ocrText.isNotBlank()) {
                                 Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = Color.Black.copy(alpha = 0.65f),
-                                    modifier = Modifier.align(Alignment.BottomStart).padding(6.dp)
+                                    shape = RoundedCornerShape(5.dp),
+                                    color = Color.Black.copy(alpha = 0.7f),
+                                    modifier = Modifier.align(Alignment.BottomStart).padding(4.dp)
                                 ) {
                                     Text(
                                         text = "OCR",
                                         color = palette.success,
-                                        fontSize = 9.sp,
+                                        fontSize = 8.sp,
                                         fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                                     )
                                 }
                             }
                             if (item.pinned) {
                                 PinDot(
                                     color = palette.pinGold,
-                                    modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
-                                )
-                            }
-                        }
-                        if (item.title.isNotBlank() || item.width > 0) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 8.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = item.title.ifBlank { "${item.width}×${item.height}" },
-                                    color = palette.textSecondary,
-                                    fontSize = 11.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
+                                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)
                                 )
                             }
                         }
@@ -185,7 +178,7 @@ fun HangingClipCard(
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(10.dp)
+                                .padding(8.dp)
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -197,26 +190,26 @@ fun HangingClipCard(
                                         Icons.Rounded.Notes,
                                         contentDescription = null,
                                         tint = accent,
-                                        modifier = Modifier.size(13.dp)
+                                        modifier = Modifier.size(11.dp)
                                     )
-                                    Spacer(Modifier.width(4.dp))
+                                    Spacer(Modifier.width(3.dp))
                                     Text(
                                         text = item.title.ifBlank { formatShortTime(item.lastCopiedAt) },
                                         color = palette.textSecondary,
-                                        fontSize = 10.sp,
+                                        fontSize = 9.5.sp,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
                                 if (item.pinned) PinDot(color = palette.pinGold)
                             }
-                            Spacer(Modifier.height(6.dp))
+                            Spacer(Modifier.height(4.dp))
                             Text(
                                 text = item.text,
                                 color = palette.textPrimary,
-                                fontSize = 12.5.sp,
-                                lineHeight = 17.sp,
-                                maxLines = 6,
+                                fontSize = 11.sp,
+                                lineHeight = 14.5.sp,
+                                maxLines = 5,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
                             )
@@ -232,7 +225,7 @@ fun HangingClipCard(
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(10.dp)
+                                .padding(8.dp)
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -240,24 +233,24 @@ fun HangingClipCard(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Surface(
-                                    shape = RoundedCornerShape(6.dp),
+                                    shape = RoundedCornerShape(5.dp),
                                     color = accent.copy(alpha = 0.16f)
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Icon(
                                             Icons.Rounded.Link,
                                             contentDescription = null,
                                             tint = accent,
-                                            modifier = Modifier.size(12.dp)
+                                            modifier = Modifier.size(10.dp)
                                         )
-                                        Spacer(Modifier.width(3.dp))
+                                        Spacer(Modifier.width(2.dp))
                                         Text(
                                             text = host,
                                             color = accent,
-                                            fontSize = 10.sp,
+                                            fontSize = 9.sp,
                                             fontWeight = FontWeight.SemiBold,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
@@ -266,22 +259,22 @@ fun HangingClipCard(
                                 }
                                 if (item.pinned) PinDot(color = palette.pinGold)
                             }
-                            Spacer(Modifier.height(8.dp))
+                            Spacer(Modifier.height(5.dp))
                             Text(
                                 text = item.title.ifBlank { host },
                                 color = palette.textPrimary,
-                                fontSize = 13.sp,
+                                fontSize = 11.5.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            Spacer(Modifier.height(4.dp))
+                            Spacer(Modifier.height(2.dp))
                             Text(
                                 text = item.url,
                                 color = palette.textSecondary,
-                                fontSize = 11.sp,
-                                lineHeight = 15.sp,
-                                maxLines = 3,
+                                fontSize = 9.5.sp,
+                                lineHeight = 13.sp,
+                                maxLines = 2,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
@@ -291,20 +284,19 @@ fun HangingClipCard(
         }
 
         if (showClothespin) {
-            // Warm wooden/gold clothespin clipping the card to the wire
             Box(
                 modifier = Modifier
-                    .offset(y = (-8).dp)
-                    .width(12.dp)
-                    .height(20.dp)
-                    .clip(RoundedCornerShape(3.dp))
+                    .offset(y = (-6).dp)
+                    .width(9.dp)
+                    .height(14.dp)
+                    .clip(RoundedCornerShape(2.5.dp))
                     .background(if (item.pinned) palette.pinGold else palette.pinGold.copy(alpha = 0.82f))
             ) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.Center)
                         .fillMaxWidth()
-                        .height(2.dp)
+                        .height(1.5.dp)
                         .background(Color.Black.copy(alpha = 0.28f))
                 )
             }

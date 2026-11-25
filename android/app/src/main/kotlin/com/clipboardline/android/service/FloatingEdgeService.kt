@@ -317,21 +317,22 @@ class FloatingEdgeService : Service(), LifecycleOwner, ViewModelStoreOwner, Save
     }
 
     private fun buildNotification(): Notification {
-        val openPending = PendingIntent.getService(
+        val openPending = PendingIntent.getActivity(
             this, 1,
-            Intent(this, FloatingEdgeService::class.java).setAction(ACTION_TOGGLE_SHELF),
+            Intent(this, InstantShelfTrampoline::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val snipPending = PendingIntent.getActivity(
             this, 2,
-            Intent(this, ScreenCaptureActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            Intent(this, InstantCaptureTrampoline::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_tile_shelf)
-            .setContentTitle("ClipBoardLine aktif")
-            .setContentText("İp Askısını açmak için dokun veya kenardan çek")
+            .setContentTitle("ClipBoardLine")
+            .setContentText("İp Askısı için dokun · Anında Alıntı aşağıda")
             .setContentIntent(openPending)
+            .addAction(R.drawable.ic_tile_shelf, "İp Askısı", openPending)
             .addAction(R.drawable.ic_tile_snip, "Ekran Alıntısı", snipPending)
             .setOngoing(true)
             .setSilent(true)
@@ -494,8 +495,8 @@ private fun FloatingShelfOverlayContent(
                                         repo.shareItem(ClipBoardLineApp.instance, item)
                                         onDismiss()
                                     },
-                                    cardWidth = 144.dp,
-                                    cardHeight = 148.dp
+                                    cardWidth = if (item.kind == ClipKind.IMAGE) 78.dp else 118.dp,
+                                    cardHeight = if (item.kind == ClipKind.IMAGE) 78.dp else 102.dp
                                 )
                             }
                         }

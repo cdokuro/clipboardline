@@ -168,10 +168,10 @@ fun LibraryScreen(
             }
         } else {
             LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                columns = GridCells.Fixed(3),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
                 itemsIndexed(filtered, key = { _, item -> item.id }) { idx, item ->
@@ -184,8 +184,8 @@ fun LibraryScreen(
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             repository.copyToSystemClipboard(item)
                         },
-                        cardWidth = 200.dp,
-                        cardHeight = 164.dp,
+                        cardWidth = 140.dp,
+                        cardHeight = if (item.kind == ClipKind.IMAGE) 104.dp else 112.dp,
                         showClothespin = false,
                         modifier = Modifier.fillMaxWidth()
                     )

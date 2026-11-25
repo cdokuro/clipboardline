@@ -66,9 +66,8 @@ class MainActivity : ComponentActivity() {
         val repo = ClipBoardLineApp.instance.repository
         handleShareIntent(intent)
 
-        if (repo.store.value.settings.edgeHandleEnabled && Settings.canDrawOverlays(this)) {
-            FloatingEdgeService.start(this)
-        }
+        // Always keep clean background service & status bar quick actions alive (edge handle is optional)
+        FloatingEdgeService.start(this)
 
         setContent {
             val store by repo.store.collectAsState()

@@ -55,12 +55,17 @@ class ClipRepository(private val context: Context) {
     private fun loadInitial(): ClipStoreData {
         return try {
             if (storeFile.exists()) {
-                json.decodeFromString<ClipStoreData>(storeFile.readText(Charsets.UTF_8))
+                val loaded = json.decodeFromString<ClipStoreData>(storeFile.readText(Charsets.UTF_8))
+                if (!loaded.settings.edgeOptInV12) {
+                    val migrated = loaded.copy(settings = loaded.settings.copy(edgeHandleEnabled = false, edgeOptInV12 = true))
+                    persistLocked(migrated)
+                    migrated
+                } else loaded
             } else {
-                ClipStoreData()
+                ClipStoreData(settings = ClipSettings(edgeHandleEnabled = false, edgeOptInV12 = true))
             }
         } catch (_: Exception) {
-            ClipStoreData()
+            ClipStoreData(settings = ClipSettings(edgeHandleEnabled = false, edgeOptInV12 = true))
         }
     }
 

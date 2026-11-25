@@ -40,6 +40,9 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -66,7 +69,16 @@
 
         <activity
             android:name=".service.InstantCaptureTrampoline"
-            android:exported="false"
+            android:exported="true"
+            android:label="@string/tile_snip_label"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.ClipBoardLine.Translucent" />
+
+        <activity
+            android:name=".service.InstantShelfTrampoline"
+            android:exported="true"
+            android:label="@string/tile_shelf_label"
             android:excludeFromRecents="true"
             android:launchMode="singleTask"
             android:theme="@style/Theme.ClipBoardLine.Translucent" />

@@ -76,8 +76,15 @@ fun SettingsScreen(
     ) {
         Text("Ayarlar", color = palette.textPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
 
-        // Floating Edge Overlay Card
-        SettingsCard(title = "Yüzen Kenar Çubuğu & Overlay") {
+        // Quick Access & Optional Edge Handle Card
+        SettingsCard(title = "Hızlı Erişim (Ekranı Kaplamadan)") {
+            Text(
+                text = "Önerilen: Bildirim çubuğundaki İp Askısı / Ekran Alıntısı düğmeleri, Samsung Hızlı Panel (Quick Tiles) veya S Pen Air Command / Tek El İşlemi kısayolları.",
+                color = palette.textSecondary,
+                fontSize = 12.sp,
+                lineHeight = 17.sp
+            )
+            Spacer(Modifier.height(10.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -85,10 +92,11 @@ fun SettingsScreen(
                 Icon(Icons.Rounded.Layers, null, tint = palette.accent, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Kenar Çekmecesi (Edge Handle)", color = palette.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text("Kenar Çubuğu Tutamağı (Opsiyonel)", color = palette.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                     Text(
-                        if (hasOverlayPermission) "İzin verildi · Her uygulamanın üstünde açılır"
-                        else "Diğer uygulamaların üstünde gösterme izni gerekli",
+                        if (!hasOverlayPermission) "Üstte gösterme izni gerekli"
+                        else if (settings.edgeHandleEnabled) "Açık · Ekran kenarında görünür"
+                        else "Kapalı · Ekran tamamen temiz (önerilen)",
                         color = if (hasOverlayPermission) palette.success else palette.pinGold,
                         fontSize = 12.sp
                     )
@@ -104,7 +112,7 @@ fun SettingsScreen(
                         } else {
                             scope.launch {
                                 repository.updateSettings { it.copy(edgeHandleEnabled = enabled) }
-                                if (enabled) FloatingEdgeService.start(context) else FloatingEdgeService.stop(context)
+                                FloatingEdgeService.start(context)
                             }
                         }
                     }
