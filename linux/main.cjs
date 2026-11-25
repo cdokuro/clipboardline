@@ -239,14 +239,16 @@ async function show(next='shelves',event=null) {
     viewEvent=event?{...event,...(mousePos?{mousePosition:mousePos}:{}),serial:crypto.randomUUID()}:(mousePos?{mousePosition:mousePos,serial:crypto.randomUUID()}:null);
     applyingBounds=true;
     try{
-      const surface=isOverlay?'overlay':next==='capture'?'capture':'normal';
-      const bounds=next==='capture'?fitCaptureBounds(display.workArea):isOverlay?display.workArea:fitNormalBounds(display.workArea);
+      const isCapture=next==='capture';
+      const isFullOverlay=isOverlay||isCapture;
+      const surface=isOverlay?'overlay':isCapture?'capture':'normal';
+      const bounds=isCapture?display.bounds:isOverlay?display.workArea:fitNormalBounds(display.workArea);
       const currentBounds=window.getBounds();
       const boundsChanged=!windowBounds.same(currentBounds,bounds);
       if(process.platform==='linux'&&!testMode&&window.isVisible()&&(!window.isFocused()||windowSurface!==surface||previousView!==next||boundsChanged))window.hide();
-      if(windowSurface!==surface){window.setMinimumSize(isOverlay?1:640,isOverlay?1:360);window.setResizable(!isOverlay);window.setMaximizable(!isOverlay);window.setSkipTaskbar(isOverlay);window.setBackgroundColor(isOverlay?'#00000000':'#18191d');window.setHasShadow(!isOverlay);window.setAlwaysOnTop((process.platform==='linux'&&!testMode)||isOverlay||next==='capture');windowSurface=surface;}
-      windowBounds.apply(window,bounds,{overlay:isOverlay});
-      if(!isOverlay&&next!=='capture'&&normalMaximized)window.maximize();
+      if(windowSurface!==surface){window.setMinimumSize(isFullOverlay?1:640,isFullOverlay?1:360);window.setResizable(!isFullOverlay);window.setMaximizable(!isFullOverlay);window.setSkipTaskbar(isFullOverlay);window.setBackgroundColor(isOverlay?'#00000000':isCapture?'#000000':'#18191d');window.setHasShadow(!isFullOverlay);window.setAlwaysOnTop((process.platform==='linux'&&!testMode)||isFullOverlay,isCapture?'screen-saver':'normal');windowSurface=surface;}
+      windowBounds.apply(window,bounds,{overlay:isFullOverlay});
+      if(!isFullOverlay&&normalMaximized)window.maximize();
     }finally{applyingBounds=false;}
     const animate=next==='shelves'&&(!window.isVisible()||wasClosing||previousView==='capture');
     if(animate)await shelfMotion.request('prepare',{hidden:!window.isVisible()||previousView==='capture'});else await shelfMotion.request('reset');
