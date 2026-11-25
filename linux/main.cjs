@@ -28,6 +28,7 @@ const {PasteTargetTracker}=require('./lib/paste-target.cjs');
 const {DragFiles}=require('./lib/drag-files.cjs');
 const {thumbnailFetch,linkMetadata} = require('./lib/network.cjs');
 const {Updates,AutomaticUpdateScheduler} = require('./lib/updates.cjs');
+const {GitHubUpdates} = require('./lib/github-updates.cjs');
 const {updatesSupported,publicUpdateState}=require('./lib/update-channel.cjs');
 const productionOverride = process.argv.includes('--production') || process.env.CLIPBOARDLINE_PRODUCTION === '1';
 if(productionOverride && !app.isPackaged) process.env.CLIPBOARDLINE_DISABLE_UPDATES = '1';
@@ -60,7 +61,7 @@ if(process.platform==='win32'){
 }
 app.setName(development?'ClipBoardLine Dev':'ClipBoardLine');
 protocol.registerSchemesAsPrivileged([{scheme:'appmedia',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true,stream:true}}]);
-let window,store,tray,trayPresentation,updates,updateScheduler,monitor,clipboardTimer,retentionTimer,updateTimer,updateLaunchTimer,previous=null,view='shelves',message='',viewEvent=null;
+let window,store,tray,trayPresentation,updates,githubUpdates,updateScheduler,monitor,clipboardTimer,retentionTimer,updateTimer,updateLaunchTimer,previous=null,view='shelves',message='',viewEvent=null;
 let lastFingerprint='',ownFingerprint='',showing=0,closing=false,watchers=[],normalBounds=null,normalMaximized=false,applyingBounds=false;
 const clipboardQueue=[];let processingClipboard=false;
 let pastePromise=null,hidePromise=null,pasteGeneration=0;
@@ -100,7 +101,12 @@ async function readSemanticImage(id){
  const resized=image.getSize();return{bitmap:image.toBitmap(),width:resized.width,height:resized.height};
 }
 
-function state(result,{surfaceOnly=false}={}) { const light=surfaceOnly&&lastBroadcastLibraryRevision===store.revision;return {...(light?{surfaceOnly:true}:store.publicState()),libraryRevision:store.revision,version:app.getVersion(),build:BUILD_NUMBER,platform:process.platform,development,view,windowMode:(view==='shelves'||view==='capture')?'overlay':'normal',windowMaximized:window?.isMaximized()||false,windowVisible:desiredVisible&&(window?.isVisible()||false),shortcutRecordingToken:shortcutRecording?.token||null,pendingCapture:pendingCapture?{id:pendingCapture.id,dataUrl:pendingCapture.dataUrl,width:pendingCapture.width,height:pendingCapture.height}:null,message:message||store.privacyWarning||'',viewEvent,imageSearch:{...(imageSearch?.state||{available:false,indexing:false,pending:0,revision:0})},update:publicUpdateState(updates.state,process.platform),...(result===undefined?{}:{result})}; }
+function currentUpdatePacket(){
+  if(UPDATES_SUPPORTED&&!development&&updates)return publicUpdateState(updates.state,process.platform);
+  if(githubUpdates)return {...githubUpdates.state};
+  return publicUpdateState(updates?.state||{},process.platform);
+}
+function state(result,{surfaceOnly=false}={}) { const light=surfaceOnly&&lastBroadcastLibraryRevision===store.revision;return {...(light?{surfaceOnly:true}:store.publicState()),libraryRevision:store.revision,version:app.getVersion(),build:BUILD_NUMBER,platform:process.platform,development,view,windowMode:(view==='shelves'||view==='capture')?'overlay':'normal',windowMaximized:window?.isMaximized()||false,windowVisible:desiredVisible&&(window?.isVisible()||false),shortcutRecordingToken:shortcutRecording?.token||null,pendingCapture:pendingCapture?{id:pendingCapture.id,dataUrl:pendingCapture.dataUrl,width:pendingCapture.width,height:pendingCapture.height}:null,message:message||store.privacyWarning||'',viewEvent,imageSearch:{...(imageSearch?.state||{available:false,indexing:false,pending:0,revision:0})},update:currentUpdatePacket(),...(result===undefined?{}:{result})}; }
 function broadcast({surfaceOnly=false}={}) {
   // Visibility and native bounds do not change library content. Retain the
   // renderer's existing rows instead of cloning and sending the full history
@@ -118,23 +124,33 @@ const announce=createAnnouncer({visible:()=>desiredVisible&&!!window?.isVisible(
 function openUpdates(){return show('settings',{settingsTab:'updates'});}
 function refreshTray(){
   if(closing||!tray||tray.isDestroyed()||!trayPresentation||!store)return;
-  trayPresentation.refresh({items:store.data.items,settings:store.data.settings,updateVersion:UPDATES_SUPPORTED?updates?.manifest?.version:undefined,systemLocale:app.getLocale()});
+  const availVer = UPDATES_SUPPORTED ? updates?.manifest?.version : githubUpdates?.manifest?.version;
+  trayPresentation.refresh({items:store.data.items,settings:store.data.settings,updateVersion:availVer,systemLocale:app.getLocale()});
 }
 function createTray(){
   if(tray)return;
   tray=new Tray(appIcon());
   trayPresentation=new StatusTray({tray,createIcon:summary=>trayIcon(nativeImage,appIcon(),summary),createMenu:summary=>{
     const t=(key,...values)=>translated(summary.language,key,...values);
-    return Menu.buildFromTemplate([{id:'tray-show',label:t('Show line'),click:()=>show('shelves')},{id:'tray-mini',label:t('Mini clipboard')||'Mini Pano (Alt+Meta+V)',click:()=>show('mini')},{id:'tray-library',label:t('Library'),click:()=>show('library')},{id:'tray-capture',label:t('Screenshots'),click:()=>capture()},{id:'tray-settings',label:t('Settings'),click:()=>show('settings')},
-      ...(UPDATES_SUPPORTED?[...(summary.updateVersion?[{id:'tray-update',label:t('Update available')+': '+summary.updateVersion+'…',click:openUpdates}]:[]),{id:'tray-check',label:t('Check for updates…'),click:async()=>{await openUpdates();await updates.check();}}]:[]),{type:'separator'},{id:'tray-quit',label:t('Quit %@','ClipBoardLine'),click:()=>app.quit()}]);
+    return Menu.buildFromTemplate([{id:'tray-show',label:t('Show line'),click:()=>show('shelves')},{id:'tray-mini',label:t('Mini clipboard')||'Mini Pano (Alt+Shift+V)',click:()=>show('mini')},{id:'tray-library',label:t('Library'),click:()=>show('library')},{id:'tray-capture',label:t('Screenshots'),click:()=>capture()},{id:'tray-settings',label:t('Settings'),click:()=>show('settings')},
+      ...(summary.updateVersion?[{id:'tray-update',label:t('Update available')+': v'+summary.updateVersion+'…',click:()=>{if(!UPDATES_SUPPORTED&&githubUpdates?.state?.releaseUrl)void shell.openExternal(githubUpdates.state.releaseUrl);else void openUpdates();}}]:[]),
+      {id:'tray-check',label:t('Check for updates…'),click:async()=>{await openUpdates();if(UPDATES_SUPPORTED&&!development)await updates.check();else if(githubUpdates)await githubUpdates.check();}},
+      {type:'separator'},{id:'tray-quit',label:t('Quit %@','ClipBoardLine'),click:()=>app.quit()}]);
   }});
   refreshTray();tray.on('click',()=>desiredVisible?hide():show('shelves'));
 }
 
 function updateAvailable(manifest){
-  if(!UPDATES_SUPPORTED)return;
-  refreshTray();if(testMode||!store.data.settings.autoCheckUpdates||!Notification.isSupported())return;
-  const notice=new Notification({title:'ClipBoardLine update available',body:`ClipBoardLine ${manifest.version} is ready. Click to review and install.`,silent:true});notice.on('click',()=>void openUpdates());notice.show();
+  refreshTray();if(testMode||!Notification.isSupported())return;
+  if(UPDATES_SUPPORTED&&!store.data.settings.autoCheckUpdates)return;
+  const isTr=outputLanguage()==='tr';
+  const notice=new Notification({
+    title:isTr?`ClipBoardLine v${manifest.version} mevcut!`:`ClipBoardLine v${manifest.version} available!`,
+    body:isTr?`GitHub'da yeni sürüm yayınlandı (v${manifest.version}). İncelemek için tıkla.`:`New release v${manifest.version} is available on GitHub. Click to view.`,
+    silent:false,
+  });
+  notice.on('click',()=>{if(!UPDATES_SUPPORTED&&manifest.url)void shell.openExternal(manifest.url);else void openUpdates();});
+  notice.show();
 }
 async function launchInstaller(file,args){const child=spawn(file,args,{detached:true,stdio:'ignore',windowsHide:true});await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});child.unref();}
 function trusted(event) {
@@ -680,6 +696,35 @@ async function command(action,payload={}) {
     }catch(error){announce(outputText(outputLanguage(),copyToClipboard?'libraryFailedCopied':'libraryFailed',describeError(outputLanguage(),error)));}
     result={id:item?.id??null};
   }
+  else if(action==='googleLens'){
+    let pngBuffer=null;
+    if(typeof payload.dataUrl==='string'&&payload.dataUrl.startsWith('data:image/png;base64,')){
+      if(payload.dataUrl.length>90_000_000)throw new Error('Invalid image');
+      const decoded=nativeImage.createFromDataURL(payload.dataUrl);
+      if(decoded.isEmpty())throw new Error('Invalid image');
+      pngBuffer=decoded.toPNG();
+    }else if(payload.id){
+      const item=store.item(payload.id);
+      if(item.kind!=='image')throw new Error('Select an image first.');
+      const img=nativeImage.createFromPath(store.posterPath(item.id));
+      if(img.isEmpty())throw new Error('Image unavailable');
+      pngBuffer=img.toPNG();
+    }else if(pendingCapture?.buffer){
+      pngBuffer=pendingCapture.buffer;
+    }else throw new Error('Select an image first.');
+    pendingCapture=null;
+    await writeImageClipboard(pngBuffer);
+    await hide(false);
+    await shell.openExternal('https://lens.google.com/');
+    const isTr=outputLanguage()==='tr';
+    announce(isTr?'Görsel panoya kopyalandı — Google Lens sayfasında Ctrl+V ile hemen aratabilirsin.':'Image copied — press Ctrl+V on Google Lens to search.');
+    result={opened:true};
+  }
+  else if(action==='openUpdateRelease'){
+    const url=githubUpdates?.state?.releaseUrl||'https://github.com/cdokuro/clipboardline/tree/feat/linux-support';
+    await shell.openExternal(url);
+    result={opened:true};
+  }
   else if(action==='cancelCapture'){
     pendingCapture=null;
     await hide();
@@ -720,7 +765,7 @@ async function command(action,payload={}) {
     if(Object.hasOwn(patch,'autoCheckUpdates')&&patch.autoCheckUpdates&&!development&&UPDATES_SUPPORTED)void updateScheduler.tick({force:true});
   }else if(action==='watchFolder'||action==='chooseWatchFolder'){const response=await dialog.showOpenDialog(window,{properties:['openDirectory']});if(response.filePaths[0]){store.modify('setSettings',{patch:{watchFolders:[...store.data.settings.watchFolders,response.filePaths[0]]}});configureWatchers();}}
   else if(action==='unwatchFolder'){const index=payload.index;if(!Number.isInteger(index)||index<0||index>=store.data.settings.watchFolders.length)throw new Error('Invalid watched folder');store.modify('setSettings',{patch:{watchFolders:store.data.settings.watchFolders.filter((_v,i)=>i!==index)}});configureWatchers();}
-  else if(action==='checkUpdates'||action==='refreshUpdates'){if(!UPDATES_SUPPORTED){/* Linux: the Windows channel is off; the state packet explains why. */}else if(development)updates.set({status:'development',message:'Development builds use a separate library. Install an official release to use its signed update channel.'});else await updates.check({force:action==='checkUpdates'});}
+  else if(action==='checkUpdates'||action==='refreshUpdates'){if(!UPDATES_SUPPORTED&&githubUpdates){await githubUpdates.check({silent:false});}else if(development&&githubUpdates){await githubUpdates.check({silent:false});}else if(development){updates.set({status:'development',message:'Development builds use a separate library. Install an official release to use its signed update channel.'});}else await updates.check({force:action==='checkUpdates'});}
   else if(action==='installUpdate'){
     if(development)throw new Error('Development builds cannot install official updates.');
     if(!UPDATES_SUPPORTED)throw new Error('Windows installer can run only on Windows.');
@@ -750,6 +795,7 @@ else app.whenReady().then(async()=>{
     print:file=>printWithWindow(file,{BrowserWindow,directory:output.tempDirectory}),
     ocr:(id,languages)=>ocr(id,true,languages)});
   mediaJobs=new MediaJobs({directory:path.join(store.directory,'media-jobs')});try{dragFiles=new DragFiles(store.directory);}catch{}updates=new Updates(path.join(store.directory,'updates'),{build:BUILD_NUMBER,version:app.getVersion(),changed:()=>broadcast(),available:updateAvailable});
+  githubUpdates=new GitHubUpdates({currentVersion:require('./package.json').version||app.getVersion(),changed:()=>{refreshTray();broadcast();},available:updateAvailable});
   updateScheduler=new AutomaticUpdateScheduler(updates,{enabled:()=>UPDATES_SUPPORTED&&!development&&!testMode&&store.data.settings.autoCheckUpdates});
   const searchPaths=modelPaths({packaged:app.isPackaged,resourcesPath:process.resourcesPath,sourceDirectory:__dirname});
   let ortModule=null,runtimeDirectory=null;try{ortModule=require.resolve('onnxruntime-web/wasm').replace(/app[.]asar([\\/])/,'app.asar.unpacked$1');runtimeDirectory=path.dirname(ortModule);}catch{}
@@ -818,6 +864,11 @@ else app.whenReady().then(async()=>{
     if(UPDATES_SUPPORTED){updateTimer=setInterval(()=>void updateScheduler.tick(),60000);
     updateLaunchTimer=setTimeout(()=>void updateScheduler.tick(),10000);updateLaunchTimer.unref();
     powerMonitor.on('resume',()=>void updateScheduler.tick());}
+    else if(githubUpdates){
+      updateLaunchTimer=setTimeout(()=>void githubUpdates.check({silent:true}),8000);updateLaunchTimer.unref();
+      updateTimer=setInterval(()=>void githubUpdates.check({silent:true}),2*60*60*1000);updateTimer.unref();
+      powerMonitor.on('resume',()=>void githubUpdates.check({silent:true}));
+    }
   }
   const startHidden = process.argv.some(arg => ['--hidden', '--tray', '--daemon', '--startup'].includes(arg));
   if (!startHidden) {
