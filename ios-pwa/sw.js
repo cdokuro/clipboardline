@@ -1,4 +1,4 @@
-const CACHE_NAME = 'clipboardline-ios-v1';
+const CACHE_NAME = 'clipboardline-ios-v2';
 const ASSETS = [
   '/clip/',
   '/clip/index.html',

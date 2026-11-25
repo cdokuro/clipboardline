@@ -443,10 +443,10 @@
       </header>
       ${state.searchOpen ? `<div class="search-wrap"><input id="shelf-search" class="search-input" value="${esc(state.query)}" placeholder="Metin, link, OCR veya etiket ara…"></div>` : ''}
       <div class="quick-row">
-        <button class="pill-btn primary" data-act="pick-edit">${ICONS.crop} Alıntı / Kırp</button>
-        <button class="pill-btn success" data-act="paste-edit">${ICONS.paste} Panoyu Kırp</button>
+        <button class="pill-btn primary" data-act="smart-snip">${ICONS.crop} Alıntı / Kırp</button>
+        <button class="pill-btn success" data-act="paste-clip">${ICONS.paste} Panodan As</button>
+        <button class="pill-btn" data-act="pick-edit">${ICONS.photo} Galeriden Kırp</button>
         <button class="pill-btn" data-act="new-note">${ICONS.plus} Not</button>
-        <button class="pill-btn" data-act="pick-photo">${ICONS.photo} Görsel</button>
         <button class="pill-btn ${state.pinnedOnly ? 'active' : ''}" data-act="toggle-pin-filter">${ICONS.pin} Sabit</button>
       </div>
       ${row('Görseller', 'var(--img-accent)', images, 'Henüz görsel yok — panodan yapıştır veya Fotoğraflar’dan seç.')}
@@ -515,18 +515,24 @@
         </div>
 
         <div class="set-card">
-          <h3>2. Arka Çift Dokunma (Back Tap) ile Tek Dokunuş Alıntı</h3>
-          <p>iPhone’un arkasına 2 kez dokununca ekran görüntüsü alıp doğrudan kırpma & Google Lens ekranını açmak için:</p>
+          <h3>2. iPhone 13 Pro — Arka Çift Dokunma (Sıfır Menü, Tak Diye Kırp & Lens!)</h3>
+          <p>iPhone’un arkasına 2 kez dokununca hiçbir menü çıkmadan ekran görüntüsünü doğrudan Kırp & Google Lens ekranında açmak için:</p>
           <ol>
-            <li>iPhone <b>Kestirmeler (Shortcuts)</b> uygulamasında yeni kestirme oluştur (Ad: <b>ClipBoardLine Alıntı</b>).</li>
+            <li><b>Kestirmeler (Shortcuts)</b> uygulamasında yeni kestirme oluştur (Ad: <b>ClipBoardLine Alıntı</b>).</li>
             <li><b>Ekran Resmi Çek</b> (Take Screenshot) eylemini ekle.</li>
-            <li><b>Panoya Kopyala</b> (Copy to Clipboard) eylemini ekle.</li>
-            <li><b>URL’leri Aç</b> (Open URLs) eylemini ekleyip şu adresi yapıştır:
-              <span class="code-pill">${esc(shortcutUrl)}</span>
+            <li><b>Görüntüyü Yeniden Boyutlandır</b> → Genişlik <b>1080</b> (Yükseklik: Otomatik).</li>
+            <li><b>Görüntüyü Dönüştür</b> → <b>JPEG</b> (Kalite: ~%70).</li>
+            <li><b>Base64 Kodla</b> (Satır Sonu: <b>Yok</b>).</li>
+            <li><b>URL’leri Aç</b> eylemini ekleyip şunu yaz (sonuna Base64 değişkenini ekle):
+              <span class="code-pill">${esc(location.origin + '/clip/#img=')}[Base64 Kodlanmış Metin]</span>
             </li>
-            <li><b>Ayarlar → Erişilebilirlik → Dokunma → Arkaya Dokun → Çift Dokunma</b> kısmından <b>ClipBoardLine Alıntı</b> kestirmesini seç!</li>
+            <li><b>Ayarlar → Erişilebilirlik → Dokunma → Arkaya Dokun → Çift Dokunma</b> → <b>ClipBoardLine Alıntı</b> seç!</li>
           </ol>
-          <button class="pill-btn primary" style="margin-top:10px" data-act="copy-shortcut-url">${ICONS.copy} Kestirme Adresini Kopyala</button>
+          <p style="margin-top:8px"><b>Daha kısa 3 adımlı alternatif:</b> <i>Ekran Resmi Çek → Panoya Kopyala → URL Aç:</i> <span class="code-pill">${esc(shortcutUrl)}</span></p>
+          <div class="quick-row" style="padding:8px 0 0">
+            <button class="pill-btn primary" data-act="copy-hash-url">${ICONS.copy} #img= Adresini Kopyala</button>
+            <button class="pill-btn" data-act="copy-shortcut-url">${ICONS.copy} Kısa Adresi Kopyala</button>
+          </div>
         </div>
 
         <div class="set-card">
@@ -1080,6 +1086,7 @@
       const a = b.dataset.act;
       if (a === 'toggle-search') { state.searchOpen = !state.searchOpen; if (!state.searchOpen) state.query = ''; render(); }
       else if (a === 'cycle-theme') { applyTheme(THEMES[(THEMES.indexOf(state.theme) + 1) % THEMES.length]); render(); }
+      else if (a === 'smart-snip') { await handleSmartSnip(); }
       else if (a === 'paste-clip') { await pasteFromClipboard(false); }
       else if (a === 'paste-edit') { await pasteFromClipboard(true); }
       else if (a === 'new-note') { openNewNoteModal(); }
@@ -1092,6 +1099,9 @@
         for (const t of trashed) await dbDelete(t.id);
         state.items = state.items.filter(i => !i.trashedAt);
         render(); toast('Çöp kutusu boşaltıldı');
+      } else if (a === 'copy-hash-url') {
+        await navigator.clipboard.writeText(location.origin + '/clip/#img=').catch(() => {});
+        toast('#img= kestirme ön eki kopyalandı');
       } else if (a === 'copy-shortcut-url') {
         await navigator.clipboard.writeText(location.origin + '/clip/?action=paste-edit').catch(() => {});
         toast('Kestirme adresi kopyalandı');
@@ -1142,6 +1152,60 @@
 
   window.addEventListener('resize', () => { if (state.editor) drawEditor(); });
 
+  async function handleSmartSnip() {
+    // 1. Try reading screenshot/image directly from iPhone clipboard first (no file-picker sheet!)
+    try {
+      if (navigator.clipboard && navigator.clipboard.read) {
+        const entries = await navigator.clipboard.read();
+        for (const entry of entries) {
+          const imgType = entry.types.find(t => t.startsWith('image/'));
+          if (imgType) {
+            const blob = await entry.getType(imgType);
+            await openEditorWithBlob(blob);
+            return;
+          }
+        }
+      }
+    } catch {}
+    // 2. If clipboard has no image yet, show clean Edna Dark choice sheet (never blindly open iOS file menu)
+    $modal.innerHTML = `
+      <div class="sheet-backdrop" id="snip-backdrop">
+        <div class="sheet-panel">
+          <div class="sheet-handle"></div>
+          <h3 style="margin:0;font-size:16px">iPhone’da Ekran Alıntısı & Kırpma</h3>
+          <p style="margin:0;color:var(--muted);font-size:13px;line-height:1.45">
+            iOS güvenlik kuralı gereği Safari tek başına ekran görüntüsü çekemez. En hızlı yol: <b>Arka Çift Dokunma (Back Tap)</b> kestirmesini bir kez kurmak — telefonun arkasına 2 kez dokununca doğrudan kırpma ekranı açılır!
+          </p>
+          <button class="pill-btn primary" id="snip-pick" style="width:100%;justify-content:center;padding:12px">${ICONS.photo} Galeriden / Son Ekran Görüntüsünden Seç</button>
+          <button class="pill-btn success" id="snip-guide" style="width:100%;justify-content:center;padding:12px">${ICONS.settings} Arka Çift Dokunma Kurulumunu Göster (30 sn)</button>
+        </div>
+      </div>`;
+    const close = () => { $modal.innerHTML = ''; };
+    document.getElementById('snip-backdrop').addEventListener('click', e => { if (e.target.id === 'snip-backdrop') close(); });
+    document.getElementById('snip-pick').addEventListener('click', () => { close(); $editorPhotoPicker.click(); });
+    document.getElementById('snip-guide').addEventListener('click', () => { close(); state.tab = 'settings'; render(); });
+  }
+
+  async function tryOpenFromUrlHash() {
+    const hash = location.hash || '';
+    if (!hash.startsWith('#img=')) return false;
+    const rawB64 = decodeURIComponent(hash.slice(5)).replace(/\s+/g, '');
+    history.replaceState(null, '', '/clip/');
+    if (rawB64.length < 32) return false;
+    try {
+      const bin = atob(rawB64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const isPng = bytes[0] === 0x89 && bytes[1] === 0x50;
+      const blob = new Blob([bytes], { type: isPng ? 'image/png' : 'image/jpeg' });
+      await openEditorWithBlob(blob);
+      return true;
+    } catch {
+      toast('Kestirmeden gelen görsel okunamadı');
+      return false;
+    }
+  }
+
   // --- Boot ---
   async function init() {
     applyTheme(state.theme);
@@ -1150,6 +1214,9 @@
     }
     state.items = await dbLoadAll();
     render();
+
+    if (await tryOpenFromUrlHash()) return;
+    window.addEventListener('hashchange', () => { void tryOpenFromUrlHash(); });
 
     // Handle iPhone Back Tap Shortcut deep-link (?action=paste-edit)
     const params = new URLSearchParams(location.search);
