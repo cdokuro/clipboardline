@@ -7,7 +7,8 @@ const {ClipboardSequenceQueries}=require('./clipboard-sequence.cjs');
 const {windowsEnvironment}=require('./windows-environment.cjs');
 const script = __dirname.includes('app.asar') ? path.join(process.resourcesPath,'native','windows-bridge.ps1') : path.join(__dirname, '..', 'native', 'windows-bridge.ps1');
 const pasteChildren=new Set();
-let lastCaptureTrace=null,sequenceQueries=null;
+let lastCaptureTrace=null,sequenceQueries=null,monitorChild=null,screenQuerySeq=0;
+const screenQueries=new Map();
 let linuxSequence = 1;
 
 function findExecutable(name) {
@@ -163,7 +164,7 @@ async function getLinuxClipboardImage() {
   return null;
 }
 
-function monitor(changed, failed, focused = () => {}, ready = () => {}) {
+function monitor(changed, failed, focused = () => {}, ready = () => {}, clicked = () => {}) {
   if (process.platform === 'linux') {
     let alive = true;
     let client = null;
@@ -312,15 +313,48 @@ function monitor(changed, failed, focused = () => {}, ready = () => {}) {
 
   if (process.platform !== 'win32') return null;
   const child = spawn(powershell, invocation('Monitor'), {windowsHide:true,stdio:['pipe','pipe','pipe'],env:windowsEnvironment()});
+  monitorChild = child;
   const queries=new ClipboardSequenceQueries(value=>child.stdin.write(value));sequenceQueries=queries;
-  const stopped=()=>{queries.close();if(sequenceQueries===queries)sequenceQueries=null;};
+  const stopped=()=>{
+    queries.close();
+    if(sequenceQueries===queries)sequenceQueries=null;
+    if(monitorChild===child)monitorChild=null;
+    for(const entry of screenQueries.values()){clearTimeout(entry.timer);entry.resolve(null);}
+    screenQueries.clear();
+  };
   child.stdin.on('error',stopped);
   let buffer=''; child.stdout.on('data',chunk => {
     buffer += chunk.toString(); if (buffer.length > 64000) { child.kill(); return; }
     let newline;
-    while ((newline=buffer.indexOf('\n')) >= 0) { const line=buffer.slice(0,newline);buffer=buffer.slice(newline+1);try { const v=JSON.parse(line); if(v.clipboardQuery!==undefined){queries.receive(v);}else if(Number.isInteger(v.sequence)) changed(v.sequence); if(v.focus) focused(v.focus); if(v.ready===true) ready(); } catch {} }
+    while ((newline=buffer.indexOf('\n')) >= 0) { const line=buffer.slice(0,newline);buffer=buffer.slice(newline+1);try { const v=JSON.parse(line); if(v.clipboardQuery!==undefined){queries.receive(v);}else if(v.captureScreenQuery!==undefined){const pending=screenQueries.get(v.captureScreenQuery);if(pending){screenQueries.delete(v.captureScreenQuery);clearTimeout(pending.timer);pending.resolve(v);}}else if(Number.isInteger(v.sequence)) changed(v.sequence); if(v.focus) focused(v.focus); if(v.clickPoint&&Number.isFinite(v.clickPoint.x)&&Number.isFinite(v.clickPoint.y)) clicked(v.clickPoint); if(v.ready===true) ready(); } catch {} }
   });
   child.on('error',error=>{stopped();failed(error);}); child.on('exit',(code,signal) => { stopped();if(!child.killed&&signal!=='SIGTERM') failed(new Error('Native clipboard monitor stopped (code ' + code + ').')); }); return child;
+}
+
+function captureScreen(rect, outPath) {
+  if (process.platform !== 'win32' || !monitorChild || monitorChild.killed || !monitorChild.stdin || !monitorChild.stdin.writable) {
+    return Promise.resolve(null);
+  }
+  const x = Math.round(rect.x), y = Math.round(rect.y), w = Math.round(rect.width), h = Math.round(rect.height);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || w <= 0 || h <= 0 || !outPath || outPath.includes('|') || outPath.includes('\n')) {
+    return Promise.resolve(null);
+  }
+  const id = ++screenQuerySeq;
+  return new Promise(resolve => {
+    const timer = setTimeout(() => {
+      screenQueries.delete(id);
+      resolve(null);
+    }, 3000);
+    timer.unref?.();
+    screenQueries.set(id, { resolve, timer });
+    try {
+      monitorChild.stdin.write(`capture-screen|${id}|${x}|${y}|${w}|${h}|${outPath}\n`);
+    } catch {
+      clearTimeout(timer);
+      screenQueries.delete(id);
+      resolve(null);
+    }
+  });
 }
 
 module.exports = {
@@ -350,6 +384,7 @@ module.exports = {
   validatePaste: target => run('ValidatePaste', {...target, prepared: true}),
   paste: target => run('Paste', target),
   copyImages: payload => run('CopyImages', payload),
+  captureScreen,
   getLinuxClipboardFormats,
   getLinuxClipboardImage,
   monitor
