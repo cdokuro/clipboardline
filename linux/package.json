@@ -1,6 +1,6 @@
 {
   "name": "clipboardline-desktop",
-  "version": "1.8.5",
+  "version": "1.8.6",
   "description": "Keyboard-first local clipboard shelves and saved library for Linux",
   "author": "ClipBoardLine contributors",
   "license": "MIT",
@@ -102,5 +102,5 @@
       "node_modules/onnxruntime-common/**"
     ]
   },
-  "clipboardLineBuild": 75
+  "clipboardLineBuild": 76
 }
