@@ -1,6 +1,6 @@
 {
   "name": "clipboardline-desktop",
-  "version": "1.7.9",
+  "version": "1.8.0",
   "description": "Keyboard-first local clipboard shelves and saved library for Linux",
   "author": "ClipBoardLine contributors",
   "license": "MIT",
@@ -20,9 +20,7 @@
     "tesseract.js": "7.0.0"
   },
   "devDependencies": {
-    "electron": "44.9.1",
-    "electron-builder": "26.15.3",
-    "playwright": "1.64.1"
+    "electron": "44.9.1"
   },
   "overrides": {
     "global-agent": "4.1.3"
