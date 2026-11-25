@@ -634,49 +634,67 @@ async function capture() {
     return{captureId:id};
   }catch(error){if(wasVisible)await show(view);throw error;}
 }
-function uploadToGoogleLens(imageObj, lang='tr') {
-  const https = require('node:https');
+function openGoogleLensInBrowser(imageObj, lang='tr') {
+  const http = require('node:http');
   const size = imageObj.getSize();
   const scale = Math.min(1, 1600 / Math.max(size.width || 1, size.height || 1));
   const resized = scale < 1
     ? imageObj.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)), quality: 'good' })
     : imageObj;
-  const jpegBuf = resized.toJPEG(88);
-  const boundary = '----ClipBoardLineLens' + crypto.randomBytes(8).toString('hex');
-  const head = Buffer.from(
-    `--${boundary}\r\n` +
-    'Content-Disposition: form-data; name="encoded_image"; filename="capture.jpg"\r\n' +
-    'Content-Type: image/jpeg\r\n\r\n',
-    'utf8'
-  );
-  const tail = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
-  const body = Buffer.concat([head, jpegBuf, tail]);
+  const finalSize = resized.getSize();
+  const jpegB64 = resized.toJPEG(88).toString('base64');
   const hl = lang === 'tr' ? 'tr' : 'en';
+  const actionUrl = `https://lens.google.com/v3/upload?hl=${hl}&stcs=${Date.now()}&ep=ccm&re=df`;
+  const dims = `${finalSize.width},${finalSize.height}`;
+  const label = lang === 'tr' ? "Google Lens'e gönderiliyor…" : 'Sending image to Google Lens…';
+  const html = `<!doctype html><html lang="${hl}"><head><meta charset="utf-8"><title>Google Lens — ClipBoardLine</title>
+<style>body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#16171d;color:#e6e8f0;font:500 15px/1.5 system-ui,-apple-system,sans-serif}.card{display:flex;align-items:center;gap:12px;padding:14px 20px;border-radius:12px;background:#21232d;border:1px solid rgba(255,255,255,.08);box-shadow:0 12px 32px rgba(0,0,0,.35)}.spin{width:18px;height:18px;border:2.5px solid rgba(255,255,255,.2);border-top-color:#7c9cff;border-radius:50%;animation:s .7s linear infinite}@keyframes s{to{transform:rotate(360deg)}}</style></head>
+<body><div class="card"><div class="spin"></div><span>${label}</span></div>
+<form id="f" method="POST" action="${actionUrl}" enctype="multipart/form-data" style="display:none">
+<input type="file" name="encoded_image" id="fi">
+<input type="hidden" name="processed_image_dimensions" value="${dims}">
+</form>
+<script>
+try {
+  const b64 = ${JSON.stringify(jpegB64)};
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const file = new File([bytes], 'capture.jpg', { type: 'image/jpeg' });
+  const dt = new DataTransfer();
+  dt.items.add(file);
+  document.getElementById('fi').files = dt.files;
+  document.getElementById('f').submit();
+} catch (e) {
+  location.replace('https://lens.google.com/?hl=${hl}');
+}
+</script></body></html>`;
+  const token = crypto.randomBytes(16).toString('hex');
   return new Promise((resolve, reject) => {
-    const req = https.request(
-      `https://lens.google.com/v3/upload?hl=${hl}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': `multipart/form-data; boundary=${boundary}`,
-          'Content-Length': body.length,
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        },
-        timeout: 12000,
-      },
-      res => {
-        const loc = res.headers?.location;
-        res.resume();
-        if (loc && /^https:\/\//i.test(loc)) {
-          resolve(loc);
-        } else {
-          reject(new Error(`Google Lens HTTP ${res.statusCode}`));
-        }
+    let settled = false;
+    const server = http.createServer((req, res) => {
+      if (req.method === 'GET' && req.url === `/lens/${token}`) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(html);
+        setTimeout(() => { try { server.close(); } catch {} }, 1500).unref?.();
+        return;
       }
-    );
-    req.on('timeout', () => req.destroy(new Error('Google Lens timeout')));
-    req.on('error', reject);
-    req.end(body);
+      res.writeHead(404);
+      res.end();
+    });
+    const guard = setTimeout(() => { try { server.close(); } catch {} }, 25000);
+    guard.unref?.();
+    server.on('close', () => clearTimeout(guard));
+    server.on('error', err => {
+      clearTimeout(guard);
+      if (!settled) { settled = true; reject(err); }
+    });
+    server.listen(0, '127.0.0.1', () => {
+      if (settled) return;
+      settled = true;
+      const addr = server.address();
+      resolve(`http://127.0.0.1:${addr.port}/lens/${token}`);
+    });
   });
 }
 const INDEX_LANGUAGES=['eng','tur'];
@@ -852,8 +870,8 @@ async function command(action,payload={}) {
     void writeImageClipboard(pngBuffer).catch(()=>{});
     const isTr=outputLanguage()==='tr';
     try{
-      const resultUrl=await uploadToGoogleLens(imgObj,isTr?'tr':'en');
-      await shell.openExternal(resultUrl);
+      const bridgeUrl=await openGoogleLensInBrowser(imgObj,isTr?'tr':'en');
+      await shell.openExternal(bridgeUrl);
       result={opened:true,direct:true};
     }catch{
       await shell.openExternal('https://lens.google.com/');
