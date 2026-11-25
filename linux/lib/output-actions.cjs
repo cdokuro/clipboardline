@@ -238,7 +238,8 @@ class OutputActions {
     this.tokens = new Map();
     this.owned = new Map();
     this.cache = new Map();
-    this.tempDirectory = runtimeDir ? path.join(runtimeDir, 'clipboardline-output') : path.join(os.tmpdir(), 'clipboardline-output-' + process.getuid());
+    const userKey = typeof process.getuid === 'function' ? String(process.getuid()) : String(process.env.USERNAME || 'user').replace(/[^A-Za-z0-9._-]/g, '_');
+    this.tempDirectory = runtimeDir ? path.join(runtimeDir, 'clipboardline-output') : path.join(os.tmpdir(), 'clipboardline-output-' + userKey);
   }
 
   say(key, ...values) { return outputText(this.language(), key, ...values); }
@@ -343,7 +344,7 @@ class OutputActions {
     const item = this.imageItem(id), saved = await this.savedFile(id);
     await this.fs.mkdir(this.tempDirectory, { recursive: true, mode: 0o700 });
     const info = await this.fs.lstat(this.tempDirectory);
-    if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid() || (info.mode & 0o077) !== 0) fail(this.say('tempNotPrivate'));
+    if (!info.isDirectory() || info.isSymbolicLink() || (process.platform !== 'win32' && typeof process.getuid === 'function' && (info.uid !== process.getuid() || (info.mode & 0o077) !== 0))) fail(this.say('tempNotPrivate'));
     try {
       const cutoff = Date.now() - TEMP_MAX_AGE; // file mtimes are wall-clock, not the injected clock
       for (const name of await this.fs.readdir(this.tempDirectory)) {
