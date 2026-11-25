@@ -540,6 +540,7 @@ function updateShelfSelection(){
 function initCaptureSession(pending){
  if(!pending||ui.captureSession?.id===pending.id)return;
  const image=new Image();
+ image.crossOrigin='anonymous';
  // doc holds annotations, crop, selection and undo/redo; crop gestures stay in this adapter.
  const session={id:pending.id,dataUrl:pending.dataUrl,width:pending.width||window.innerWidth||1920,height:pending.height||window.innerHeight||1080,base:image,tool:'crop',doc:annotationEngine.createDocument(),style:{...annotationEngine.DEFAULT_STYLE},zoom:1,pan:{x:0,y:0},busy:false};
  ui.captureSession=session;
