@@ -66,6 +66,16 @@ let lastFingerprint='',ownFingerprint='',showing=0,closing=false,watchers=[],nor
 const clipboardQueue=[];let processingClipboard=false;
 let pastePromise=null,hidePromise=null,pasteGeneration=0;
 let lastBroadcastLibraryRevision=-1,windowSurface=null,pendingCapture=null,lastClickDisplayId=null;
+const captureReadyWaiters=new Map();
+function waitForCaptureReady(captureId,timeoutMs=350){
+  if(!captureId)return Promise.resolve();
+  return new Promise(resolve=>{
+    const done=()=>{const entry=captureReadyWaiters.get(captureId);if(entry){clearTimeout(entry.timer);captureReadyWaiters.delete(captureId);}resolve();};
+    const timer=setTimeout(done,timeoutMs);
+    timer.unref?.();
+    captureReadyWaiters.set(captureId,{done,timer});
+  });
+}
 let visibilityGeneration=0,desiredVisible=false;
 const shelfMotion=new MotionBridge(value=>{if(window&&!window.isDestroyed())window.webContents.send('clipboardline:shelf-motion',value);});
 const windowBounds=new WindowBounds();
@@ -288,8 +298,26 @@ async function show(next='shelves',event=null) {
     const animate=next==='shelves'&&(!window.isVisible()||wasClosing||previousView==='capture');
     if(animate)await shelfMotion.request('prepare',{hidden:!window.isVisible()||previousView==='capture'});else await shelfMotion.request('reset');
     if(generation!==visibilityGeneration)return;
+    const prePaintCapture=next==='capture'&&!window.isVisible();
+    if(prePaintCapture){
+      // Paint capture workspace & decoded screenshot before revealing window so shelves never flash.
+      const readyPromise=waitForCaptureReady(pendingCapture?.id,350);
+      broadcast({surfaceOnly:true});
+      await readyPromise;
+      if(generation!==visibilityGeneration)return;
+    }
     try{window.setIgnoreMouseEvents(false);}catch{}
-    window.show();window.moveTop?.();window.focus();windowBounds.shown(window);broadcast({surfaceOnly:true});
+    if(prePaintCapture&&process.platform==='win32'){
+      try{
+        window.setOpacity(0);
+        window.show();window.moveTop?.();window.focus();windowBounds.shown(window);broadcast({surfaceOnly:true});
+        await new Promise(resolve=>setTimeout(resolve,32));
+      }finally{
+        if(window&&!window.isDestroyed())try{window.setOpacity(1);}catch{}
+      }
+    }else{
+      window.show();window.moveTop?.();window.focus();windowBounds.shown(window);broadcast({surfaceOnly:true});
+    }
     // Commands can await the settled pixels, but the window and keyboard are
     // available immediately. A concurrent toggle can cancel this animation.
     if(animate)await shelfMotion.request('open');
@@ -307,7 +335,9 @@ async function hide(restore=true) {
   const operation=(async()=>{
     if(pendingHide)await pendingHide;
     if(generation!==visibilityGeneration)return;
-    pendingCapture=null;const wasCapture=view==='capture';if(wasCapture)view='shelves';
+    pendingCapture=null;const wasCapture=view==='capture';
+    if(wasCapture&&window.isVisible())window.hide();
+    if(wasCapture)view='shelves';
     rememberNormalBounds();const target=previous;viewEvent=null;broadcast({surfaceOnly:true});
     if(view==='shelves'&&!wasCapture&&window.isVisible())await shelfMotion.request('close');
     if(generation!==visibilityGeneration)return;
@@ -984,6 +1014,7 @@ else app.whenReady().then(async()=>{
   window.webContents.on('did-finish-load',()=>{lastBroadcastLibraryRevision=-1;});
   ipcMain.handle('clipboardline:state',event=>{trusted(event);return state();});
   ipcMain.on('clipboardline:shelf-motion-finished',(event,value)=>{trusted(event);shelfMotion.acknowledge(value);});
+  ipcMain.on('clipboardline:capture-ready',(event,captureId)=>{trusted(event);const entry=captureReadyWaiters.get(captureId);if(entry)entry.done();});
   ipcMain.handle('clipboardline:command',async(event,action,payload)=>{trusted(event);try{return await command(action,payload);}catch(error){if(!error?.announced)notify(error.message);return state({error:error.message});}});
   window.on('blur',()=>{if(shortcutRecording){finishShortcutRecording();broadcast({surfaceOnly:true});}});
   window.on('hide',()=>finishShortcutRecording());
