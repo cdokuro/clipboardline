@@ -1,0 +1,48 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Clothesline wire -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M18,38 Q54,48 90,38"
+        android:strokeWidth="2.8"
+        android:strokeColor="#7C9CFF"
+        android:strokeLineCap="round" />
+    <!-- Left hanging card -->
+    <path
+        android:fillColor="#262B3D"
+        android:pathData="M26,44 L48,46 L46,76 L24,74 Z"
+        android:strokeWidth="2"
+        android:strokeColor="#7C9CFF"
+        android:strokeLineJoin="round" />
+    <!-- Left card lines -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M30,54 L42,55 M30,61 L40,62 M30,68 L37,68.5"
+        android:strokeWidth="2.2"
+        android:strokeColor="#C6D4FF"
+        android:strokeLineCap="round" />
+    <!-- Right hanging image card -->
+    <path
+        android:fillColor="#2E344D"
+        android:pathData="M56,46 L82,44 L84,74 L58,76 Z"
+        android:strokeWidth="2"
+        android:strokeColor="#52D196"
+        android:strokeLineJoin="round" />
+    <!-- Right card mountain icon -->
+    <path
+        android:fillColor="#52D196"
+        android:pathData="M61,70 L67,60 L72,66 L76,62 L81,70 Z" />
+    <path
+        android:fillColor="#F0A868"
+        android:pathData="M66,54 m-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0" />
+    <!-- Warm gold clothespins -->
+    <path
+        android:fillColor="#F0A868"
+        android:pathData="M34.5,35 L39.5,35.5 L38.8,47 L33.8,46.5 Z" />
+    <path
+        android:fillColor="#F0A868"
+        android:pathData="M66.5,35.5 L71.5,35 L72.2,46.5 L67.2,47 Z" />
+</vector>

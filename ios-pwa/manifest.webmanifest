@@ -1,0 +1,15 @@
+{
+  "name": "ClipBoardLine",
+  "short_name": "ClipBoardLine",
+  "description": "İp Askısı pano, kırpma/işaretleme, OCR ve Google Lens — iPhone sürümü",
+  "start_url": "/clip/",
+  "scope": "/clip/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#14151c",
+  "theme_color": "#14151c",
+  "icons": [
+    { "src": "/clip/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/clip/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

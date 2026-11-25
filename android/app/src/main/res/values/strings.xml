@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ClipBoardLine</string>
+    <string name="tile_shelf_label">İp Askısı</string>
+    <string name="tile_snip_label">Ekran Alıntısı</string>
+    <string name="accessibility_service_desc">Onay penceresi olmadan tek dokunuşla anında ekran alıntısı almak için kullanılır.</string>
+</resources>
