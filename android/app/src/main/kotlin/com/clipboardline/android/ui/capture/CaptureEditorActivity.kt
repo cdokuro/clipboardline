@@ -12,6 +12,8 @@ import android.graphics.RectF
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -82,6 +84,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -234,7 +237,7 @@ class CaptureEditorActivity : ComponentActivity() {
             try { File(sourcePath).delete() } catch (_: Exception) {}
         }
         if (!bitmap.isRecycled) bitmap.recycle()
-        finish()
+        finishAndRemoveTask()
     }
 
     companion object {
@@ -272,6 +275,13 @@ private fun CaptureEditorScreen(
     var activeColor by remember { mutableStateOf(Color(0xFFFF5C6C)) }
     var strokeWidth by remember { mutableFloatStateOf(7f) }
     var busy by remember { mutableStateOf(false) }
+    var showDrawTools by remember { mutableStateOf(false) }
+    var isInteracting by remember { mutableStateOf(false) }
+    val chromeAlpha by animateFloatAsState(
+        targetValue = if (isInteracting) 0f else 1f,
+        animationSpec = tween(durationMillis = 120),
+        label = "chromeAlpha"
+    )
     var ocrDialogText by remember { mutableStateOf<String?>(null) }
 
     // Crop rect in image pixel coordinates (null = full screen)
@@ -371,6 +381,7 @@ private fun CaptureEditorScreen(
 
                     detectDragGestures(
                         onDragStart = { pos ->
+                            isInteracting = true
                             val imgPt = screenToImage(pos)
                             dragStartImg = imgPt
                             when (activeTool) {
@@ -474,6 +485,7 @@ private fun CaptureEditorScreen(
                             }
                         },
                         onDragEnd = {
+                            isInteracting = false
                             if (activeTool == MarkupTool.CROP) {
                                 val c = cropRect
                                 if (c != null && (c.width() < 16f || c.height() < 16f)) {
@@ -488,6 +500,7 @@ private fun CaptureEditorScreen(
                             }
                         },
                         onDragCancel = {
+                            isInteracting = false
                             draftAnnotation = null
                         }
                     )
@@ -634,151 +647,234 @@ private fun CaptureEditorScreen(
             }
         }
 
-        // TOP FLOATING TOOLBAR (Drawing tools + Colors + Undo/Redo + Crop dimensions)
-        Surface(
-            shape = RoundedCornerShape(18.dp),
-            color = palette.surface.copy(alpha = 0.94f),
-            border = BorderStroke(1.dp, palette.border),
-            shadowElevation = 10.dp,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(horizontal = 10.dp, vertical = 8.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+        // ULTRA-SLIM TOP PILL (auto-hides smoothly to 0% while dragging/resizing!)
+        if (chromeAlpha > 0.01f) {
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = palette.surface.copy(alpha = 0.90f),
+                border = BorderStroke(1.dp, palette.border),
+                shadowElevation = 6.dp,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 8.dp)
+                    .graphicsLayer { alpha = chromeAlpha }
             ) {
                 Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    ToolChip(Icons.Rounded.Crop, "Kırp", activeTool == MarkupTool.CROP) { activeTool = MarkupTool.CROP }
-                    ToolChip(Icons.Rounded.Edit, "Kalem", activeTool == MarkupTool.PEN) { activeTool = MarkupTool.PEN }
-                    ToolChip(Icons.Rounded.Brush, "Fosforlu", activeTool == MarkupTool.HIGHLIGHTER) { activeTool = MarkupTool.HIGHLIGHTER }
-                    ToolChip(Icons.AutoMirrored.Rounded.ArrowForward, "Ok", activeTool == MarkupTool.ARROW) { activeTool = MarkupTool.ARROW }
-                    ToolChip(Icons.Rounded.CropSquare, "Kutu", activeTool == MarkupTool.RECT) { activeTool = MarkupTool.RECT }
-                    ToolChip(Icons.Rounded.RadioButtonUnchecked, "Daire", activeTool == MarkupTool.ELLIPSE) { activeTool = MarkupTool.ELLIPSE }
-                    ToolChip(Icons.Rounded.BlurOn, "Gizle", activeTool == MarkupTool.PIXELATE) { activeTool = MarkupTool.PIXELATE }
-                    ToolChip(Icons.Rounded.Pin, "Sayı", activeTool == MarkupTool.NUMBER) { activeTool = MarkupTool.NUMBER }
-                }
-                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    colorChoices.forEach { color ->
-                        Box(
-                            modifier = Modifier
-                                .size(22.dp)
-                                .clip(CircleShape)
-                                .background(color)
-                                .border(
-                                    width = if (activeColor == color) 2.5.dp else 1.dp,
-                                    color = if (activeColor == color) palette.accent else Color.White.copy(alpha = 0.35f),
-                                    shape = CircleShape
-                                )
-                                .clickable { activeColor = color }
-                        )
-                    }
-                    Spacer(Modifier.width(4.dp))
                     IconButton(
-                        onClick = { if (annotations.isNotEmpty()) redoStack.add(annotations.removeAt(annotations.lastIndex)) },
-                        enabled = annotations.isNotEmpty(),
+                        onClick = onCancel,
+                        enabled = !busy && !isInteracting,
                         modifier = Modifier.size(30.dp)
                     ) {
-                        Icon(Icons.AutoMirrored.Rounded.Undo, "Geri Al", tint = if (annotations.isNotEmpty()) palette.textPrimary else palette.textSecondary.copy(alpha = 0.35f), modifier = Modifier.size(18.dp))
+                        Icon(Icons.Rounded.Close, "Kapat", tint = palette.danger, modifier = Modifier.size(18.dp))
                     }
-                    IconButton(
-                        onClick = { if (redoStack.isNotEmpty()) annotations.add(redoStack.removeAt(redoStack.lastIndex)) },
-                        enabled = redoStack.isNotEmpty(),
-                        modifier = Modifier.size(30.dp)
-                    ) {
-                        Icon(Icons.AutoMirrored.Rounded.Redo, "İleri Al", tint = if (redoStack.isNotEmpty()) palette.textPrimary else palette.textSecondary.copy(alpha = 0.35f), modifier = Modifier.size(18.dp))
+                    Text(
+                        text = "${cropW} × ${cropH}",
+                        color = palette.textPrimary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (cropRect != null) {
+                        Surface(
+                            onClick = { cropRect = null },
+                            enabled = !busy && !isInteracting,
+                            shape = RoundedCornerShape(999.dp),
+                            color = palette.surfaceElevated
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Rounded.Fullscreen, "Tam Ekran", tint = palette.textPrimary, modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(3.dp))
+                                Text("Tam", color = palette.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                            }
+                        }
                     }
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = palette.surfaceElevated
-                    ) {
-                        Text(
-                            text = "${cropW}×${cropH}",
-                            color = palette.textSecondary,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                        )
+                    if (annotations.isNotEmpty() || redoStack.isNotEmpty()) {
+                        IconButton(
+                            onClick = { if (annotations.isNotEmpty()) redoStack.add(annotations.removeAt(annotations.lastIndex)) },
+                            enabled = annotations.isNotEmpty() && !isInteracting,
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(Icons.AutoMirrored.Rounded.Undo, "Geri Al", tint = if (annotations.isNotEmpty()) palette.textPrimary else palette.textSecondary.copy(alpha = 0.3f), modifier = Modifier.size(16.dp))
+                        }
                     }
                 }
             }
         }
 
-        // BOTTOM FLOATING ACTION BAR (Google Lens + OCR + Fullscreen + Share + Cancel + Save)
-        Surface(
-            shape = RoundedCornerShape(18.dp),
-            color = palette.surface.copy(alpha = 0.94f),
-            border = BorderStroke(1.dp, palette.border),
-            shadowElevation = 10.dp,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(horizontal = 10.dp, vertical = 10.dp)
-        ) {
-            Row(
+        // ZERO-SCROLL COMPACT BOTTOM DOCK (+ collapsible drawing tray; auto-hides smoothly while dragging!)
+        if (chromeAlpha > 0.01f) {
+            Column(
                 modifier = Modifier
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 10.dp)
+                    .graphicsLayer { alpha = chromeAlpha },
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                IconButton(onClick = onCancel, enabled = !busy, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Rounded.Close, "İptal", tint = palette.danger)
-                }
-
-                if (cropRect != null) {
-                    BottomPill(Icons.Rounded.Fullscreen, "Tam", palette.surfaceElevated, palette.textPrimary, enabled = !busy) {
-                        cropRect = null
-                    }
-                }
-
-                BottomPill(Icons.Rounded.ImageSearch, "Google Lens", Color(0xFF2B3B6B), Color(0xFFA8C5FF), enabled = !busy) {
-                    busy = true
-                    scope.launch {
-                        val rendered = withContext(Dispatchers.Default) { renderFinalBitmap(bitmap, cropRect, annotations) }
-                        onGoogleLens(rendered)
-                    }
-                }
-
-                BottomPill(Icons.Rounded.DocumentScanner, "OCR", palette.surfaceElevated, palette.success, enabled = !busy) {
-                    busy = true
-                    scope.launch {
-                        val rendered = withContext(Dispatchers.Default) { renderFinalBitmap(bitmap, cropRect, annotations) }
-                        val text = OcrEngine.recognizeBitmap(rendered)
-                        if (rendered !== bitmap) rendered.recycle()
-                        busy = false
-                        ocrDialogText = text.ifBlank { "(Görselde okunabilir metin bulunamadı)" }
-                    }
-                }
-
-                IconButton(
-                    onClick = {
-                        busy = true
-                        scope.launch {
-                            val rendered = withContext(Dispatchers.Default) { renderFinalBitmap(bitmap, cropRect, annotations) }
-                            onShare(rendered)
-                            busy = false
+                if (showDrawTools) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = palette.surface.copy(alpha = 0.95f),
+                        border = BorderStroke(1.dp, palette.border),
+                        shadowElevation = 8.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly
+                            ) {
+                                CompactToolChip(Icons.Rounded.Crop, "Kırp", activeTool == MarkupTool.CROP) { activeTool = MarkupTool.CROP }
+                                CompactToolChip(Icons.Rounded.Edit, "Kalem", activeTool == MarkupTool.PEN) { activeTool = MarkupTool.PEN }
+                                CompactToolChip(Icons.Rounded.Brush, "Fosfor", activeTool == MarkupTool.HIGHLIGHTER) { activeTool = MarkupTool.HIGHLIGHTER }
+                                CompactToolChip(Icons.AutoMirrored.Rounded.ArrowForward, "Ok", activeTool == MarkupTool.ARROW) { activeTool = MarkupTool.ARROW }
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly
+                            ) {
+                                CompactToolChip(Icons.Rounded.CropSquare, "Kutu", activeTool == MarkupTool.RECT) { activeTool = MarkupTool.RECT }
+                                CompactToolChip(Icons.Rounded.RadioButtonUnchecked, "Daire", activeTool == MarkupTool.ELLIPSE) { activeTool = MarkupTool.ELLIPSE }
+                                CompactToolChip(Icons.Rounded.BlurOn, "Gizle", activeTool == MarkupTool.PIXELATE) { activeTool = MarkupTool.PIXELATE }
+                                CompactToolChip(Icons.Rounded.Pin, "Sayı", activeTool == MarkupTool.NUMBER) { activeTool = MarkupTool.NUMBER }
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                colorChoices.forEach { color ->
+                                    Box(
+                                        modifier = Modifier
+                                            .size(22.dp)
+                                            .clip(CircleShape)
+                                            .background(color)
+                                            .border(
+                                                width = if (activeColor == color) 2.5.dp else 1.dp,
+                                                color = if (activeColor == color) palette.accent else Color.White.copy(alpha = 0.35f),
+                                                shape = CircleShape
+                                            )
+                                            .clickable { activeColor = color }
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { if (annotations.isNotEmpty()) redoStack.add(annotations.removeAt(annotations.lastIndex)) },
+                                    enabled = annotations.isNotEmpty(),
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(Icons.AutoMirrored.Rounded.Undo, "Geri Al", tint = if (annotations.isNotEmpty()) palette.textPrimary else palette.textSecondary.copy(alpha = 0.3f), modifier = Modifier.size(16.dp))
+                                }
+                                IconButton(
+                                    onClick = { if (redoStack.isNotEmpty()) annotations.add(redoStack.removeAt(redoStack.lastIndex)) },
+                                    enabled = redoStack.isNotEmpty(),
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(Icons.AutoMirrored.Rounded.Redo, "İleri Al", tint = if (redoStack.isNotEmpty()) palette.textPrimary else palette.textSecondary.copy(alpha = 0.3f), modifier = Modifier.size(16.dp))
+                                }
+                            }
                         }
-                    },
-                    enabled = !busy,
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(Icons.Rounded.Share, "Paylaş", tint = palette.textPrimary)
+                    }
                 }
 
-                BottomPill(Icons.Rounded.Check, "Kaydet", palette.accent, Color(0xFF0D101A), enabled = !busy) {
-                    busy = true
-                    scope.launch {
-                        val rendered = withContext(Dispatchers.Default) { renderFinalBitmap(bitmap, cropRect, annotations) }
-                        onSaveToLine(rendered)
+                // Main 5-action ZERO-SCROLL dock — every action visible at once!
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = palette.surface.copy(alpha = 0.94f),
+                    border = BorderStroke(1.dp, palette.border),
+                    shadowElevation = 10.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 6.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        DockActionButton(
+                            icon = Icons.Rounded.ImageSearch,
+                            label = "Lens",
+                            bg = Color(0xFF2B3B6B),
+                            fg = Color(0xFFA8C5FF),
+                            enabled = !busy && !isInteracting
+                        ) {
+                            busy = true
+                            scope.launch {
+                                val rendered = withContext(Dispatchers.Default) { renderFinalBitmap(bitmap, cropRect, annotations) }
+                                onGoogleLens(rendered)
+                            }
+                        }
+
+                        DockActionButton(
+                            icon = Icons.Rounded.DocumentScanner,
+                            label = "Metin",
+                            bg = palette.surfaceElevated,
+                            fg = palette.success,
+                            enabled = !busy && !isInteracting
+                        ) {
+                            busy = true
+                            scope.launch {
+                                val rendered = withContext(Dispatchers.Default) { renderFinalBitmap(bitmap, cropRect, annotations) }
+                                val text = OcrEngine.recognizeBitmap(rendered)
+                                if (rendered !== bitmap) rendered.recycle()
+                                busy = false
+                                ocrDialogText = text.ifBlank { "(Görselde okunabilir metin bulunamadı)" }
+                            }
+                        }
+
+                        DockActionButton(
+                            icon = Icons.Rounded.Edit,
+                            label = "Çiz",
+                            bg = if (showDrawTools || activeTool != MarkupTool.CROP) palette.accent.copy(alpha = 0.24f) else palette.surfaceElevated,
+                            fg = if (showDrawTools || activeTool != MarkupTool.CROP) palette.accent else palette.textPrimary,
+                            enabled = !busy && !isInteracting
+                        ) {
+                            showDrawTools = !showDrawTools
+                            if (!showDrawTools && activeTool != MarkupTool.CROP) {
+                                activeTool = MarkupTool.CROP
+                            }
+                        }
+
+                        DockActionButton(
+                            icon = Icons.Rounded.Share,
+                            label = "Paylaş",
+                            bg = palette.surfaceElevated,
+                            fg = palette.textPrimary,
+                            enabled = !busy && !isInteracting
+                        ) {
+                            busy = true
+                            scope.launch {
+                                val rendered = withContext(Dispatchers.Default) { renderFinalBitmap(bitmap, cropRect, annotations) }
+                                onShare(rendered)
+                                busy = false
+                            }
+                        }
+
+                        DockActionButton(
+                            icon = Icons.Rounded.Check,
+                            label = "Kaydet",
+                            bg = palette.accent,
+                            fg = Color(0xFF0D101A),
+                            enabled = !busy && !isInteracting
+                        ) {
+                            busy = true
+                            scope.launch {
+                                val rendered = withContext(Dispatchers.Default) { renderFinalBitmap(bitmap, cropRect, annotations) }
+                                onSaveToLine(rendered)
+                            }
+                        }
                     }
                 }
             }
@@ -815,7 +911,7 @@ private fun CaptureEditorScreen(
 }
 
 @Composable
-private fun ToolChip(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
+private fun CompactToolChip(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
     val palette = LocalClipPalette.current
     Surface(
         onClick = onClick,
@@ -827,15 +923,15 @@ private fun ToolChip(icon: ImageVector, label: String, selected: Boolean, onClic
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(icon, label, tint = if (selected) palette.accent else palette.textPrimary, modifier = Modifier.size(16.dp))
+            Icon(icon, label, tint = if (selected) palette.accent else palette.textPrimary, modifier = Modifier.size(15.dp))
             Spacer(Modifier.width(4.dp))
-            Text(label, color = if (selected) palette.accent else palette.textPrimary, fontSize = 11.5.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+            Text(label, color = if (selected) palette.accent else palette.textPrimary, fontSize = 11.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
         }
     }
 }
 
 @Composable
-private fun BottomPill(
+private fun DockActionButton(
     icon: ImageVector,
     label: String,
     bg: Color,
@@ -849,13 +945,13 @@ private fun BottomPill(
         shape = RoundedCornerShape(12.dp),
         color = bg
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            Icon(icon, label, tint = fg, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(5.dp))
-            Text(label, color = fg, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+            Icon(icon, label, tint = fg, modifier = Modifier.size(18.dp))
+            Text(label, color = fg, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
         }
     }
 }
