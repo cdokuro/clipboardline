@@ -34,6 +34,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:label="@string/launcher_shelf_name"
             android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
@@ -63,29 +64,42 @@
         <activity
             android:name=".ui.capture.ScreenCaptureActivity"
             android:exported="false"
+            android:taskAffinity="com.clipboardline.android.capture"
             android:excludeFromRecents="true"
+            android:noHistory="true"
             android:launchMode="singleTask"
             android:theme="@style/Theme.ClipBoardLine.Translucent" />
 
         <activity
             android:name=".service.InstantCaptureTrampoline"
             android:exported="true"
-            android:label="@string/tile_snip_label"
+            android:label="@string/app_name"
+            android:taskAffinity="com.clipboardline.android.snip"
             android:excludeFromRecents="true"
-            android:launchMode="singleTask"
-            android:theme="@style/Theme.ClipBoardLine.Translucent" />
+            android:noHistory="true"
+            android:launchMode="singleInstance"
+            android:theme="@style/Theme.ClipBoardLine.Translucent">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
 
         <activity
             android:name=".service.InstantShelfTrampoline"
             android:exported="true"
             android:label="@string/tile_shelf_label"
+            android:taskAffinity="com.clipboardline.android.shelf"
             android:excludeFromRecents="true"
-            android:launchMode="singleTask"
+            android:noHistory="true"
+            android:launchMode="singleInstance"
             android:theme="@style/Theme.ClipBoardLine.Translucent" />
 
         <activity
             android:name=".ui.capture.CaptureEditorActivity"
             android:exported="false"
+            android:taskAffinity="com.clipboardline.android.capture"
+            android:excludeFromRecents="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:theme="@style/Theme.ClipBoardLine.Fullscreen" />
 

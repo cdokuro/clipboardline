@@ -133,10 +133,19 @@ class FloatingEdgeService : Service(), LifecycleOwner, ViewModelStoreOwner, Save
 
         when (intent?.action) {
             ACTION_TOGGLE_SHELF -> {
+                ClipAccessibilityService.dismissShadeIfReady()
                 if (shelfOverlayView != null) hideShelfOverlay() else showShelfOverlay()
             }
-            ACTION_SHOW_SHELF -> showShelfOverlay()
+            ACTION_SHOW_SHELF -> {
+                ClipAccessibilityService.dismissShadeIfReady()
+                showShelfOverlay()
+            }
             ACTION_HIDE_SHELF -> hideShelfOverlay()
+            ACTION_INSTANT_SNIP -> {
+                hideShelfOverlay()
+                // Dismiss notification shade directly via AccessibilityService (zero Activity -> MainActivity never pops up!)
+                ClipAccessibilityService.requestInstantCapture(applicationContext, delayMs = 420L, dismissShade = true)
+            }
             else -> {
                 if (Settings.canDrawOverlays(this)) {
                     attachEdgeHandle()
@@ -317,23 +326,23 @@ class FloatingEdgeService : Service(), LifecycleOwner, ViewModelStoreOwner, Save
     }
 
     private fun buildNotification(): Notification {
-        val openPending = PendingIntent.getActivity(
+        val openPending = PendingIntent.getForegroundService(
             this, 1,
-            Intent(this, InstantShelfTrampoline::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION),
+            Intent(this, FloatingEdgeService::class.java).setAction(ACTION_TOGGLE_SHELF),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val snipPending = PendingIntent.getActivity(
+        val snipPending = PendingIntent.getForegroundService(
             this, 2,
-            Intent(this, InstantCaptureTrampoline::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION),
+            Intent(this, FloatingEdgeService::class.java).setAction(ACTION_INSTANT_SNIP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_tile_shelf)
             .setContentTitle("ClipBoardLine")
-            .setContentText("İp Askısı için dokun · Anında Alıntı aşağıda")
-            .setContentIntent(openPending)
-            .addAction(R.drawable.ic_tile_shelf, "İp Askısı", openPending)
+            .setContentText("Tek dokunuşla alttaki pencereden ekran alıntısı")
+            .setContentIntent(snipPending)
             .addAction(R.drawable.ic_tile_snip, "Ekran Alıntısı", snipPending)
+            .addAction(R.drawable.ic_tile_shelf, "İp Askısı", openPending)
             .setOngoing(true)
             .setSilent(true)
             .build()
@@ -345,6 +354,7 @@ class FloatingEdgeService : Service(), LifecycleOwner, ViewModelStoreOwner, Save
         const val ACTION_TOGGLE_SHELF = "com.clipboardline.android.TOGGLE_SHELF"
         const val ACTION_SHOW_SHELF = "com.clipboardline.android.SHOW_SHELF"
         const val ACTION_HIDE_SHELF = "com.clipboardline.android.HIDE_SHELF"
+        const val ACTION_INSTANT_SNIP = "com.clipboardline.android.INSTANT_SNIP"
 
         @Volatile
         private var activeInstance: FloatingEdgeService? = null

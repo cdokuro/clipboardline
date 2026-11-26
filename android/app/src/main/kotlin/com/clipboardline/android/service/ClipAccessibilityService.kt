@@ -38,12 +38,23 @@ class ClipAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    fun captureScreenNow(delayMs: Long = 90L) {
+    fun dismissNotificationShade() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun captureScreenNow(delayMs: Long = 90L, dismissShade: Boolean = false) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             ScreenCaptureActivity.launch(this)
             return
         }
         FloatingEdgeService.setHandleVisible(false)
+        if (dismissShade) {
+            dismissNotificationShade()
+        }
         mainHandler.postDelayed({
             try {
                 takeScreenshot(
@@ -109,14 +120,18 @@ class ClipAccessibilityService : AccessibilityService() {
 
         fun isReady(): Boolean = instanceRef?.get() != null
 
+        fun dismissShadeIfReady() {
+            instanceRef?.get()?.dismissNotificationShade()
+        }
+
         /**
          * Takes an instant zero-dialog screenshot if AccessibilityService is active;
          * otherwise falls back to MediaProjection flow.
          */
-        fun requestInstantCapture(context: Context, delayMs: Long = 90L) {
+        fun requestInstantCapture(context: Context, delayMs: Long = 90L, dismissShade: Boolean = false) {
             val svc = instanceRef?.get()
             if (svc != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                svc.captureScreenNow(delayMs)
+                svc.captureScreenNow(delayMs, dismissShade)
             } else {
                 ScreenCaptureActivity.launch(context)
             }
