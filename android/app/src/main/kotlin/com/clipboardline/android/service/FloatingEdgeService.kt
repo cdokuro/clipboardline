@@ -144,7 +144,7 @@ class FloatingEdgeService : Service(), LifecycleOwner, ViewModelStoreOwner, Save
             ACTION_INSTANT_SNIP -> {
                 hideShelfOverlay()
                 // Dismiss notification shade directly via AccessibilityService (zero Activity -> MainActivity never pops up!)
-                ClipAccessibilityService.requestInstantCapture(applicationContext, delayMs = 420L, dismissShade = true)
+                ClipAccessibilityService.requestInstantCapture(applicationContext, delayMs = 260L, dismissShade = true)
             }
             else -> {
                 if (Settings.canDrawOverlays(this)) {

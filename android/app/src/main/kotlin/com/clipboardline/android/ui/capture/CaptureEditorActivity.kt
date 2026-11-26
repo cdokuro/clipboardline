@@ -142,6 +142,25 @@ private sealed class AnnotationItem {
     ) : AnnotationItem()
 }
 
+object CaptureBitmapHolder {
+    private val ref = java.util.concurrent.atomic.AtomicReference<Pair<String, Bitmap>?>(null)
+
+    fun put(bitmap: Bitmap): String {
+        val token = "mem_${System.nanoTime()}"
+        val prev = ref.getAndSet(token to bitmap)
+        if (prev != null && prev.second !== bitmap && !prev.second.isRecycled) {
+            try { prev.second.recycle() } catch (_: Exception) {}
+        }
+        return token
+    }
+
+    fun take(token: String): Bitmap? {
+        val cur = ref.get() ?: return null
+        if (cur.first != token) return null
+        return if (ref.compareAndSet(cur, null)) cur.second else null
+    }
+}
+
 class CaptureEditorActivity : ComponentActivity() {
 
     private var sourcePath: String = ""
@@ -151,12 +170,15 @@ class CaptureEditorActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
+        val memToken = intent.getStringExtra(EXTRA_MEM_TOKEN).orEmpty()
         sourcePath = intent.getStringExtra(EXTRA_IMAGE_PATH).orEmpty()
         deleteSourceOnClose = intent.getBooleanExtra(EXTRA_DELETE_SOURCE, false)
 
-        val bitmap = if (sourcePath.isNotBlank() && File(sourcePath).exists()) {
-            BitmapFactory.decodeFile(sourcePath)
-        } else null
+        val bitmap = when {
+            memToken.isNotBlank() -> CaptureBitmapHolder.take(memToken)
+            sourcePath.isNotBlank() && File(sourcePath).exists() -> BitmapFactory.decodeFile(sourcePath)
+            else -> null
+        }
 
         if (bitmap == null) {
             finish()
@@ -218,11 +240,17 @@ class CaptureEditorActivity : ComponentActivity() {
     companion object {
         private const val EXTRA_IMAGE_PATH = "image_path"
         private const val EXTRA_DELETE_SOURCE = "delete_source"
+        private const val EXTRA_MEM_TOKEN = "mem_token"
 
         fun createIntent(context: Context, imagePath: String, deleteSourceOnClose: Boolean = false): Intent =
             Intent(context, CaptureEditorActivity::class.java).apply {
                 putExtra(EXTRA_IMAGE_PATH, imagePath)
                 putExtra(EXTRA_DELETE_SOURCE, deleteSourceOnClose)
+            }
+
+        fun createIntentFromMemory(context: Context, token: String): Intent =
+            Intent(context, CaptureEditorActivity::class.java).apply {
+                putExtra(EXTRA_MEM_TOKEN, token)
             }
     }
 }

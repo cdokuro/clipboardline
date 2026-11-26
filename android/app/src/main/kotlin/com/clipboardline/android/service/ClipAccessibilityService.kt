@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
+import com.clipboardline.android.ui.capture.CaptureBitmapHolder
 import com.clipboardline.android.ui.capture.CaptureEditorActivity
 import com.clipboardline.android.ui.capture.ScreenCaptureActivity
 import java.io.File
@@ -74,20 +75,15 @@ class ClipAccessibilityService : AccessibilityService() {
                                 val swBmp = hwBmp.copy(Bitmap.Config.ARGB_8888, false)
                                 hwBmp.recycle()
 
-                                val outDir = File(cacheDir, "captures").apply { mkdirs() }
-                                val outFile = File(outDir, "shot_${System.currentTimeMillis()}.png")
-                                FileOutputStream(outFile).use { fos ->
-                                    swBmp.compress(Bitmap.CompressFormat.PNG, 100, fos)
-                                }
-                                swBmp.recycle()
+                                // Zero-disk in-memory handoff (~15ms vs ~1400ms PNG encode/decode!)
+                                val memToken = CaptureBitmapHolder.put(swBmp)
 
                                 mainHandler.post {
                                     FloatingEdgeService.setHandleVisible(true)
                                     startActivity(
-                                        CaptureEditorActivity.createIntent(
+                                        CaptureEditorActivity.createIntentFromMemory(
                                             this@ClipAccessibilityService,
-                                            outFile.absolutePath,
-                                            deleteSourceOnClose = true
+                                            memToken
                                         ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION)
                                     )
                                 }
