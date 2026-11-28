@@ -730,7 +730,7 @@ function configureWatchers() {
     ?[path.join(home,'Pictures','Screenshots'),path.join(home,'Resimler','Ekran Görüntüleri'),path.join(home,'Resimler','Screenshots')]
     :(process.platform==='win32'?[path.join(home,'Pictures','Screenshots'),path.join(home,'OneDrive','Pictures','Screenshots'),path.join(home,'OneDrive','Resimler','Ekran Görüntüleri')]:[]);
   const folders=[...new Set([...store.data.settings.watchFolders,...defaultDirs.filter(d=>{try{return fs.statSync(d).isDirectory();}catch{return false;}})])];
-  for(const folder of folders){try{if(!fs.statSync(folder).isDirectory())continue;const timers=new Map();const watcher=fs.watch(folder,(_event,name)=>{if(!name||!/[.](png|jpe?g|webp|bmp|mov|mp4)$/i.test(name)||name.startsWith('.'))return;clearTimeout(timers.get(name));timers.set(name,setTimeout(()=>{timers.delete(name);try{const file=path.join(folder,path.basename(name));if(output?.ownsFile(file))return;const item=importFile(file);Promise.resolve(item).then(record=>{broadcast();if(store.data.settings.openAfterScreenshot)void show('shelves',{selectId:record.id,kind:'image',freshlyCaptured:true});}).catch(err=>{console.warn('Watch folder import error:',err?.message||err);});}catch(err){console.warn('Watch folder item error:',err?.message||err);}},700));});watcher.on('error',err=>{console.warn('Watch folder watcher error:',err?.message||err);});watchers.push(watcher);}catch(err){console.warn('Watch folder configure error:',err?.message||err);}}
+  for(const folder of folders){try{if(!fs.statSync(folder).isDirectory())continue;const timers=new Map();const watcher=fs.watch(folder,(_event,name)=>{if(!name||!/[.](png|jpe?g|webp|bmp|mov|mp4)$/i.test(name)||name.startsWith('.'))return;clearTimeout(timers.get(name));timers.set(name,setTimeout(()=>{timers.delete(name);try{const file=path.join(folder,path.basename(name));if(output?.ownsFile(file))return;const item=importFile(file);Promise.resolve(item).then(record=>{broadcast();if(store.data.settings.openAfterScreenshot&&desiredVisible&&window?.isVisible())void show('shelves',{selectId:record.id,kind:'image',freshlyCaptured:true});}).catch(err=>{console.warn('Watch folder import error:',err?.message||err);});}catch(err){console.warn('Watch folder item error:',err?.message||err);}},700));});watcher.on('error',err=>{console.warn('Watch folder watcher error:',err?.message||err);});watchers.push(watcher);}catch(err){console.warn('Watch folder configure error:',err?.message||err);}}
 }
 // English catalog titles (the Settings rows) so the renderer can localize a failed-restore notice.
 const SHORTCUT_TITLES={toggle:'Show or hide the line',search:'Search shelves from other apps',library:'Open library',copyLatest:'Copy latest image',screenshot:'Screenshot',mini:'Open mini clipboard'};
@@ -1060,9 +1060,11 @@ else app.whenReady().then(async()=>{
     configureShortcuts();configureWatchers();
 
     clipboardTimer=setInterval(()=>{if(!monitor)void readClipboard();},1000);
+    // Top-edge hot zone is opt-in: resting the cursor on the top edge (browser
+    // tabs, maximized title bars, games) must not pop the line open by itself.
     let topEdgeHotSince=0;
     const edgeTimer=setInterval(()=>{
-      if(closing||showing||hidePromise||desiredVisible)return void(topEdgeHotSince=0);
+      if(closing||showing||hidePromise||desiredVisible||!store.data.settings.openAtTopEdge)return void(topEdgeHotSince=0);
       try{
         const cursor=screen.getCursorScreenPoint(),display=screen.getDisplayNearestPoint(cursor);
         const atTopEdge=cursor.y<=display.bounds.y+2&&cursor.x>display.bounds.x+80&&cursor.x<display.bounds.x+display.bounds.width-80;
